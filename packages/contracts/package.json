@@ -1,0 +1,20 @@
+{
+  "name": "@orderflow/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Event envelope, event schemas (zod) and topic names shared by all services",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@orderflow/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

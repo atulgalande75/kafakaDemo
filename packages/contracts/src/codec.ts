@@ -1,0 +1,97 @@
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
+import { envelopeSchema } from './envelope.js';
+import {
+  eventSchemas,
+  topicEventType,
+  type DataOf,
+  type EventForTopic,
+  type EventOf,
+  type EventType,
+} from './events.js';
+import type { Topic } from './topics.js';
+
+/** Thrown when a message cannot be decoded into a valid event. Never worth retrying. */
+export class InvalidEventError extends Error {
+  override readonly name = 'InvalidEventError';
+  constructor(
+    message: string,
+    readonly details?: string,
+  ) {
+    super(details ? `${message}: ${details}` : message);
+  }
+}
+
+export interface CreateEventOptions {
+  correlationId: string;
+  eventId?: string;
+  occurredAt?: Date;
+}
+
+/** Creates a new, schema-validated event envelope. */
+export function createEvent<T extends EventType>(
+  type: T,
+  data: DataOf<T>,
+  options: CreateEventOptions,
+): EventOf<T> {
+  const candidate = {
+    eventId: options.eventId ?? randomUUID(),
+    type,
+    version: 1,
+    occurredAt: (options.occurredAt ?? new Date()).toISOString(),
+    correlationId: options.correlationId,
+    data,
+  };
+  return eventSchemas[type].parse(candidate) as EventOf<T>;
+}
+
+export function serializeEvent(event: { eventId: string }): string {
+  return JSON.stringify(event);
+}
+
+/**
+ * Decodes and validates a raw Kafka message value for a topic. Rejects malformed
+ * JSON, envelopes that don't match, events of the wrong type for the topic and
+ * unsupported versions - all with an {@link InvalidEventError}.
+ */
+export function decodeEvent<T extends Topic>(
+  topic: T,
+  value: Buffer | string | null | undefined,
+): EventForTopic<T> {
+  if (value == null || value.length === 0) {
+    throw new InvalidEventError('Empty message value');
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(value.toString());
+  } catch (err) {
+    throw new InvalidEventError('Message value is not valid JSON', (err as Error).message);
+  }
+
+  const envelope = envelopeSchema.safeParse(json);
+  if (!envelope.success) {
+    throw new InvalidEventError('Invalid event envelope', z.prettifyError(envelope.error));
+  }
+
+  const expectedType = topicEventType[topic];
+  if (envelope.data.type !== expectedType) {
+    throw new InvalidEventError(
+      `Unexpected event type "${envelope.data.type}" on topic "${topic}" (expected "${expectedType}")`,
+    );
+  }
+
+  const schema = eventSchemas[expectedType];
+  const expectedVersion = schema.shape.version.value;
+  if (envelope.data.version !== expectedVersion) {
+    throw new InvalidEventError(
+      `Unsupported version ${envelope.data.version} for "${expectedType}" (supported: ${expectedVersion})`,
+    );
+  }
+
+  const event = schema.safeParse(json);
+  if (!event.success) {
+    throw new InvalidEventError(`Invalid "${expectedType}" payload`, z.prettifyError(event.error));
+  }
+  return event.data as EventForTopic<T>;
+}
