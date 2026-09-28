@@ -47,6 +47,15 @@ describe('dlq-replay', () => {
     });
   });
 
+  it('records which client replayed the message', () => {
+    const message = toReplayMessage(
+      record(),
+      { topic: 'orders.created.dlq', partition: 0, offset: '3' },
+      'dlq-replay',
+    );
+    expect(message.headers?.['replayed-by']).toBe('dlq-replay');
+  });
+
   it('increments replay-count and restores base64 values', () => {
     const base = record();
     const binary = Buffer.from([0xde, 0xad, 0xbe, 0xef]);

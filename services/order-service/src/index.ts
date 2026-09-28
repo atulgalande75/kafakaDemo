@@ -1,3 +1,4 @@
+import { authConfigFromEnv, createJwtVerifier, remoteJwks } from '@orderflow/auth';
 import { ConsumerGroups } from '@orderflow/contracts';
 import {
   createEventConsumer,
@@ -34,7 +35,15 @@ async function main() {
     handlers: createOutcomeHandlers(repo),
   });
 
-  const app = buildApp({ repo, producer, logger });
+  const auth = authConfigFromEnv();
+  logger.info({ issuer: auth.issuer, audience: auth.audience }, 'verifying JWTs via JWKS');
+  const verifier = createJwtVerifier({
+    issuer: auth.issuer,
+    audience: auth.audience,
+    jwks: remoteJwks(auth.jwksUri),
+  });
+
+  const app = buildApp({ repo, producer, logger, verifier });
   onShutdown(
     logger,
     () => app.close(),

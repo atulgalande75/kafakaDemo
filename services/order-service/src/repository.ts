@@ -11,7 +11,8 @@ export interface OrderRepository {
   get(id: string): Promise<StoredOrder | undefined>;
   save(stored: StoredOrder): Promise<void>;
   delete(id: string): Promise<void>;
-  list(limit: number): Promise<Order[]>;
+  /** Newest first; only orders created by `ownerSub` when given. */
+  list(limit: number, ownerSub?: string): Promise<Order[]>;
 }
 
 /**
@@ -35,10 +36,11 @@ export class InMemoryOrderRepository implements OrderRepository {
     return Promise.resolve();
   }
 
-  list(limit: number) {
+  list(limit: number, ownerSub?: string) {
     return Promise.resolve(
       [...this.orders.values()]
         .map((s) => s.order)
+        .filter((o) => ownerSub === undefined || o.createdBy?.sub === ownerSub)
         .reverse()
         .slice(0, limit),
     );

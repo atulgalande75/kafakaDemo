@@ -10,6 +10,8 @@ const settings: PaymentSettings = { failureRate: 0, declineRate: 0, cardLimit: 2
 const orderData = (totalAmount = 50) => ({
   orderId: randomUUID(),
   customerId: 'c-1',
+  customerTier: 'standard' as const,
+  country: 'US',
   items: [{ sku: 'SKU-MOUSE', quantity: 2, unitPrice: totalAmount / 2 }],
   totalAmount,
   currency: 'USD',

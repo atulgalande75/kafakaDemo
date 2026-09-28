@@ -19,6 +19,7 @@ export function createPaymentHandlers(
       const decision = chargeCard(event.data, settings, random);
       const options = {
         correlationId: event.correlationId,
+        actor: event.actor,
         eventId: deriveEventId(event.eventId, 'payment'),
       };
 

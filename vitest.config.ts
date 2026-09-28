@@ -1,16 +1,13 @@
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
-
-const src = (pkg: string) =>
-  fileURLToPath(new URL(`./packages/${pkg}/src/index.ts`, import.meta.url));
 
 export default defineConfig({
   resolve: {
-    // Tests run against workspace sources directly - no build step required.
-    alias: {
-      '@orderflow/contracts': src('contracts'),
-      '@orderflow/kafka-utils': src('kafka-utils'),
-    },
+    // Resolve workspace packages to their TypeScript sources (see the "@orderflow/source"
+    // export condition in each package.json) - no build step needed for tests.
+    conditions: ['@orderflow/source'],
+  },
+  ssr: {
+    resolve: { conditions: ['@orderflow/source'], externalConditions: ['@orderflow/source'] },
   },
   test: {
     include: ['{packages,services,tools}/*/src/**/*.test.ts'],

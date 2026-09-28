@@ -1,4 +1,6 @@
 import type {
+  Actor,
+  CustomerTier,
   InventoryRejectedEvent,
   InventoryReservedEvent,
   OrderCreatedEvent,
@@ -12,6 +14,8 @@ export type OrderStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED';
 export interface Order {
   id: string;
   customerId: string;
+  customerTier: CustomerTier;
+  country: string;
   items: OrderItem[];
   totalAmount: number;
   currency: string;
@@ -23,6 +27,8 @@ export interface Order {
     reason?: string;
   };
   correlationId: string;
+  /** Who placed the order (from the access token). Used for ownership checks. */
+  createdBy?: Actor;
   createdAt: string;
   updatedAt: string;
   /** Audit trail of the events that changed this order. */
@@ -33,10 +39,12 @@ export type OutcomeEvent =
   PaymentCompletedEvent | PaymentFailedEvent | InventoryReservedEvent | InventoryRejectedEvent;
 
 export function orderFromEvent(event: OrderCreatedEvent): Order {
-  const { orderId, customerId, items, totalAmount, currency } = event.data;
+  const { orderId, customerId, customerTier, country, items, totalAmount, currency } = event.data;
   return {
     id: orderId,
     customerId,
+    customerTier,
+    country,
     items,
     totalAmount,
     currency,
@@ -44,6 +52,7 @@ export function orderFromEvent(event: OrderCreatedEvent): Order {
     payment: { status: 'PENDING' },
     inventory: { status: 'PENDING' },
     correlationId: event.correlationId,
+    createdBy: event.actor,
     createdAt: event.occurredAt,
     updatedAt: event.occurredAt,
     history: [

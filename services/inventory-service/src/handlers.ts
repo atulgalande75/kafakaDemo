@@ -18,6 +18,7 @@ export function createInventoryHandlers(
       const result = inventory.reserve(orderId, items);
       const options = {
         correlationId: event.correlationId,
+        actor: event.actor,
         eventId: deriveEventId(event.eventId, 'inventory'),
       };
 

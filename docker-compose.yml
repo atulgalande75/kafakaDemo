@@ -1,6 +1,7 @@
 # Local infrastructure for the order pipeline demo.
 #   Kafka    -> localhost:9092 (single-node KRaft: broker + controller, no ZooKeeper)
 #   Kafka UI -> http://localhost:8080
+#   Keycloak -> http://localhost:8081 (realm "orderflow", admin console: admin / admin)
 #
 # Topics are created by the services on startup (see packages/contracts/src/topics.ts),
 # so auto-topic-creation is disabled to keep the topic layout explicit.
@@ -54,6 +55,34 @@ services:
       KAFKA_CLUSTERS_0_NAME: orderflow
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       DYNAMIC_CONFIG_ENABLED: 'false'
+
+  keycloak:
+    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.4}
+    container_name: orderflow-keycloak
+    # Dev mode with an in-memory H2 database; the realm is re-imported on every start.
+    command: ['start-dev', '--import-realm']
+    ports:
+      - '8081:8080'
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Pin the issuer so tokens say iss=http://localhost:8081/realms/orderflow no matter
+      # which hostname was used to request them.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HEALTH_ENABLED: 'true'
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # The image has no curl; talk HTTP to the management port with bash.
+      test:
+        [
+          'CMD-SHELL',
+          "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
 
 volumes:
   kafka-data:

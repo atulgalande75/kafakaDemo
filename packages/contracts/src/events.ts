@@ -21,9 +21,22 @@ export const orderItemSchema = z.object({
   unitPrice: money,
 });
 
+export const CUSTOMER_TIERS = ['standard', 'gold', 'platinum'] as const;
+export const customerTierSchema = z.enum(CUSTOMER_TIERS);
+export type CustomerTier = z.infer<typeof customerTierSchema>;
+
+/** ISO 3166-1 alpha-2 country code, e.g. "US". */
+export const countrySchema = z
+  .string()
+  .regex(/^[A-Za-z]{2}$/, 'must be a 2-letter country code')
+  .toUpperCase();
+
 export const orderCreatedDataSchema = z.object({
   orderId: z.uuid(),
   customerId: z.string().min(1),
+  // Added later with defaults, so version 1 events without them remain valid.
+  customerTier: customerTierSchema.default('standard'),
+  country: countrySchema.default('US'),
   items: z.array(orderItemSchema).min(1),
   totalAmount: money,
   currency,
@@ -82,6 +95,8 @@ export const eventSchemas = {
 
 export type EventOf<T extends EventType> = z.infer<(typeof eventSchemas)[T]>;
 export type DataOf<T extends EventType> = EventOf<T>['data'];
+/** What producers pass in: like {@link DataOf}, but fields with defaults are optional. */
+export type DataInputOf<T extends EventType> = z.input<(typeof eventSchemas)[T]>['data'];
 
 export type OrderCreatedEvent = EventOf<'order.created'>;
 export type PaymentCompletedEvent = EventOf<'payment.completed'>;
