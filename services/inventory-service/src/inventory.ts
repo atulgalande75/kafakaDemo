@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 /** Starting stock. SKU-WEBCAM runs out quickly under load; SKU-GPU is always out of stock. */
 export const INITIAL_STOCK: Readonly<Record<string, number>> = {
-  'SKU-KEYBOARD': 500,
-  'SKU-MOUSE': 1000,
-  'SKU-MONITOR': 200,
-  'SKU-LAPTOP': 100,
-  'SKU-HEADSET': 300,
+  'SKU-KEYBOARD': 5_000,
+  'SKU-MOUSE': 10_000,
+  'SKU-MONITOR': 2_000,
+  'SKU-LAPTOP': 1_000,
+  'SKU-HEADSET': 3_000,
   'SKU-WEBCAM': 10,
   'SKU-GPU': 0,
 };

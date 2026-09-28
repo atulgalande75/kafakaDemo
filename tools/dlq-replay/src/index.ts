@@ -155,7 +155,24 @@ async function replay(dlq: string) {
     );
     for (const [topic, n] of Object.entries(byTarget)) console.log(`   ${n} -> ${topic}`);
   } finally {
-    if (!dryRun) await producer.disconnect();
+    if (dryRun) {
+      await deleteGroup(groupId);
+    } else {
+      await producer.disconnect();
+    }
+  }
+}
+
+/** Removes the throwaway consumer group a dry run creates. */
+async function deleteGroup(groupId: string) {
+  const admin = kafka.admin();
+  await admin.connect();
+  try {
+    await admin.deleteGroups([groupId]);
+  } catch {
+    // Best effort: an empty group expires on its own.
+  } finally {
+    await admin.disconnect();
   }
 }
 
