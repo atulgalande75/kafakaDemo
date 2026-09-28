@@ -29,8 +29,8 @@ export function eventHeaders(event: Envelope): IHeaders {
 
 export function createEventProducer(kafka: Kafka, logger: Logger): EventProducer {
   const producer = kafka.producer({
-    // Idempotent producer: broker de-duplicates retried sends (requires acks=all, 1 in-flight).
-    idempotent: true,
+    // One in-flight request keeps per-partition ordering intact when a send is retried.
+    // A retried send can still write an event twice - consumers de-duplicate by eventId.
     maxInFlightRequests: 1,
     // Java-compatible murmur2 partitioning: same key -> same partition across clients.
     createPartitioner: Partitioners.DefaultPartitioner,
