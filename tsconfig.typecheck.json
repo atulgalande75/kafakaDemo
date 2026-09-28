@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "customConditions": ["@orderflow/source"]
+  },
+  "include": ["packages/*/src", "services/*/src", "tools/*/src", "vitest.config.ts"]
+}

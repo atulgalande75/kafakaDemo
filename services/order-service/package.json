@@ -1,0 +1,17 @@
+{
+  "name": "@orderflow/order-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false --conditions=@orderflow/source src/index.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@orderflow/contracts": "^0.1.0",
+    "@orderflow/kafka-utils": "^0.1.0",
+    "fastify": "^5.12.5",
+    "zod": "^4.6.5"
+  }
+}

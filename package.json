@@ -1,0 +1,44 @@
+{
+  "name": "orderflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Event-driven order pipeline demo with Kafka, Node.js and TypeScript",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "tools/*"
+  ],
+  "scripts": {
+    "predev": "node scripts/ensure-install.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "lint": "eslint . && prettier --check .",
+    "lint:fix": "eslint . --fix && prettier --write .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down -v",
+    "lag": "docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group order-service --group payment-service --group inventory-service --group notification-service",
+    "load": "npm run start --silent -w @orderflow/load-generator --",
+    "dlq:replay": "npm run start --silent -w @orderflow/dlq-replay --"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.4",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  }
+}

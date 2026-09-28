@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  e2e:
+    name: End-to-end smoke test (Kafka)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LOG_FORMAT: json
+      PAYMENT_DECLINE_RATE: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Start Kafka
+        run: docker compose up -d --wait kafka
+
+      - name: Start services
+        run: |
+          mkdir -p logs
+          for s in order payment inventory notification; do
+            nohup npm start -w @orderflow/$s-service > logs/$s.log 2>&1 &
+          done
+          timeout 60 bash -c 'until curl -sf localhost:3000/health; do sleep 1; done'
+
+      - name: Orders flow through the pipeline
+        run: npm run load -- --count 30 --rate 15 --scenario mixed --wait --timeout 60
+
+      - name: Duplicates are skipped
+        run: |
+          npm run load -- --count 5 --rate 5 --duplicate --wait --timeout 60
+          grep -q 'duplicate event skipped' logs/payment.log
+          grep -q 'duplicate event skipped' logs/inventory.log
+
+      - name: Poison messages go to the DLQ
+        run: |
+          npm run load -- --poison 5
+          # 5 poison messages x 2 consumer groups (payment + inventory)
+          timeout 60 bash -c 'until npm run --silent dlq:replay -- -t orders.created.dlq --dry-run --reason invalid-message | grep -q "would replay 10"; do sleep 2; done'
+
+      - name: Service logs
+        if: always()
+        run: tail -n 100 logs/*.log || true
