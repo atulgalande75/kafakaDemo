@@ -45,7 +45,6 @@ jobs:
     timeout-minutes: 15
     env:
       LOG_FORMAT: json
-      PAYMENT_DECLINE_RATE: '0'
     steps:
       - uses: actions/checkout@v4
 
@@ -59,8 +58,11 @@ jobs:
           npm ci
           npm run build
 
-      - name: Start Kafka
-        run: docker compose up -d --wait kafka
+      # Keycloak issues the OAuth2 tokens the load generator and dlq-replay use.
+      # No secrets needed: the demo realm (infra/keycloak) ships its own demo credentials,
+      # and without LD_SDK_KEY every service uses the local feature-flag provider.
+      - name: Start Kafka and Keycloak
+        run: docker compose up -d --wait kafka keycloak
 
       - name: Start services
         run: |
@@ -69,6 +71,11 @@ jobs:
             nohup npm start -w @orderflow/$s-service > logs/$s.log 2>&1 &
           done
           timeout 60 bash -c 'until curl -sf localhost:3000/health; do sleep 1; done'
+
+      - name: API rejects unauthenticated requests
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/orders)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3000/orders/some-id)" = 401
 
       - name: Orders flow through the pipeline
         run: npm run load -- --count 30 --rate 15 --scenario mixed --wait --timeout 60
