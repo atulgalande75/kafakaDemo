@@ -27,9 +27,15 @@ export function createKafka({ clientId, logger, brokers = brokersFromEnv() }: Cr
     logCreator:
       () =>
       ({ namespace, level, log }: LogEntry) => {
-        const pinoLevel = PINO_LEVEL[level];
-        if (!pinoLevel) return;
         const { message, ...extra } = log;
+        let pinoLevel = PINO_LEVEL[level];
+        // kafkajs logs every error *response* (e.g. "coordinator is loading" on a fresh
+        // cluster) and connection retry at ERROR, then retries. Failures that survive the
+        // retries surface as exceptions / consumer crashes, which we log ourselves.
+        if (pinoLevel === 'error' && (namespace === 'Connection' || namespace === 'BrokerPool')) {
+          pinoLevel = message.startsWith('Response ') ? 'debug' : 'warn';
+        }
+        if (!pinoLevel) return;
         kafkaLogger[pinoLevel]({ namespace, ...extra }, message);
       },
     // Keep retrying the initial connection so services can start before Kafka is ready.
