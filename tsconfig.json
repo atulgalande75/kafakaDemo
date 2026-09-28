@@ -18,6 +18,12 @@
     },
     {
       "path": "services/notification-service"
+    },
+    {
+      "path": "tools/load-generator"
+    },
+    {
+      "path": "tools/dlq-replay"
     }
   ]
 }

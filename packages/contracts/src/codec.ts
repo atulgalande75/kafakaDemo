@@ -79,7 +79,10 @@ export function decodeEvent<T extends Topic>(
   try {
     json = JSON.parse(value.toString());
   } catch (err) {
-    throw new InvalidEventError('Message value is not valid JSON', (err as Error).message);
+    // JSON.parse quotes the raw input; strip control/binary bytes so logs stay readable.
+    // eslint-disable-next-line no-control-regex -- deliberately matching control bytes
+    const details = (err as Error).message.replace(/[\u0000-\u001f\u007f-\u009f\ufffd]/g, '?');
+    throw new InvalidEventError('Message value is not valid JSON', details);
   }
 
   const envelope = envelopeSchema.safeParse(json);

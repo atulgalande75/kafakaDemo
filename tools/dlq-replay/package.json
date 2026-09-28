@@ -1,0 +1,17 @@
+{
+  "name": "@orderflow/dlq-replay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "orderflow-dlq-replay": "dist/index.js"
+  },
+  "scripts": {
+    "start": "tsx --conditions=@orderflow/source src/index.ts",
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@orderflow/contracts": "^0.1.0",
+    "@orderflow/kafka-utils": "^0.1.0"
+  }
+}

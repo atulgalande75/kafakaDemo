@@ -5,15 +5,17 @@
 //   npm run dev -- --skip payment        # everything except payment-service
 //
 // A ./.env file (see .env.example) is loaded if present and inherited by all services.
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import concurrently from 'concurrently';
 
 const SERVICES = [
-  { name: 'order', workspace: '@orderflow/order-service', color: 'cyan' },
-  { name: 'payment', workspace: '@orderflow/payment-service', color: 'magenta' },
-  { name: 'inventory', workspace: '@orderflow/inventory-service', color: 'yellow' },
-  { name: 'notification', workspace: '@orderflow/notification-service', color: 'green' },
+  { name: 'order', color: 36 },
+  { name: 'payment', color: 35 },
+  { name: 'inventory', color: 33 },
+  { name: 'notification', color: 32 },
 ];
 
 const { values } = parseArgs({
@@ -42,17 +44,42 @@ const selected = SERVICES.filter(
 
 const envFile = new URL('../.env', import.meta.url);
 if (existsSync(envFile)) {
-  process.loadEnvFile(envFile);
+  process.loadEnvFile(fileURLToPath(envFile));
   console.log('[orderflow] loaded .env');
 }
 
-const { result } = concurrently(
-  selected.map((s) => ({
-    command: `npm run dev --silent -w ${s.workspace}`,
-    name: s.name,
-    prefixColor: s.color,
-  })),
-  { prefix: 'name', padPrefix: true, killOthersOn: [], handleInput: false },
-);
+const tsx = fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url));
+const width = Math.max(...selected.map((s) => s.name.length));
+const useColor = process.env.NO_COLOR === undefined;
+const children = new Set();
 
-result.catch(() => process.exit(1));
+for (const service of selected) {
+  const label = `[${service.name.padEnd(width)}]`;
+  const prefix = useColor ? `\x1b[${service.color}m${label}\x1b[0m ` : `${label} `;
+  // Spawned directly (no npm/sh layers) so a single Ctrl+C reaches every process once
+  // and each service can disconnect its consumer cleanly before exiting.
+  const child = spawn(
+    process.execPath,
+    [tsx, 'watch', '--clear-screen=false', '--conditions=@orderflow/source', 'src/index.ts'],
+    {
+      cwd: fileURLToPath(new URL(`../services/${service.name}-service`, import.meta.url)),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  children.add(child);
+  for (const stream of [child.stdout, child.stderr]) {
+    createInterface({ input: stream }).on('line', (line) => console.log(prefix + line));
+  }
+  child.on('exit', (code, signal) => {
+    children.delete(child);
+    console.log(`${prefix}exited (${signal ?? code})`);
+    if (children.size === 0) process.exit(0);
+  });
+}
+
+// Ctrl+C in a terminal already signals every process in the foreground group, so
+// just wait for the services to finish. Anything else (e.g. `kill <pid>`) is forwarded.
+process.on('SIGINT', () => {});
+process.on('SIGTERM', () => {
+  for (const child of children) child.kill('SIGTERM');
+});

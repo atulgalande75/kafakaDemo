@@ -25,8 +25,10 @@ export function onShutdown(logger: Logger, ...cleanups: Array<() => Promise<unkn
     }
     process.exit(0);
   };
-  process.once('SIGINT', (s) => void handle(s));
-  process.once('SIGTERM', (s) => void handle(s));
+  // `on`, not `once`: under watchers/launchers the same Ctrl+C can arrive more than once,
+  // and a second, unhandled SIGINT would kill the process before consumers disconnect.
+  process.on('SIGINT', (s) => void handle(s));
+  process.on('SIGTERM', (s) => void handle(s));
 }
 
 /** Logs and exits on a fatal startup error. */
