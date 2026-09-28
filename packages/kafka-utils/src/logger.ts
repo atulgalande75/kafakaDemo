@@ -16,7 +16,8 @@ export function createLogger(service: string): Logger {
         target: 'pino-pretty',
         options: {
           translateTime: 'HH:MM:ss.l',
-          ignore: 'pid,hostname,name',
+          ignore: 'pid,hostname,name,groupId',
+          singleLine: true,
           // stdout is a pipe under `npm run dev` (concurrently), so force colors.
           colorize: process.env.NO_COLOR === undefined,
         },

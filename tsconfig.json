@@ -1,8 +1,23 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/contracts" },
-    { "path": "packages/kafka-utils" },
-    { "path": "services/order-service" }
+    {
+      "path": "packages/contracts"
+    },
+    {
+      "path": "packages/kafka-utils"
+    },
+    {
+      "path": "services/order-service"
+    },
+    {
+      "path": "services/payment-service"
+    },
+    {
+      "path": "services/inventory-service"
+    },
+    {
+      "path": "services/notification-service"
+    }
   ]
 }

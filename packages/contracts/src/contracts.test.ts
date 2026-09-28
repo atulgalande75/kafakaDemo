@@ -7,6 +7,7 @@ import {
   Topics,
   createEvent,
   decodeEvent,
+  deriveEventId,
   dlqTopic,
   serializeEvent,
   sourceTopicOf,
@@ -87,5 +88,17 @@ describe('decodeEvent', () => {
     expect(() => decodeEvent(Topics.OrdersCreated, JSON.stringify(bad))).toThrow(
       /Invalid "order.created" payload/,
     );
+  });
+});
+
+describe('deriveEventId', () => {
+  it('is deterministic, distinct per name and a valid envelope id', () => {
+    const source = randomUUID();
+    const id = deriveEventId(source, 'payment');
+    expect(deriveEventId(source, 'payment')).toBe(id);
+    expect(deriveEventId(source, 'inventory')).not.toBe(id);
+    expect(() =>
+      createEvent(EventTypes.OrderCreated, orderData(), { correlationId: 'c', eventId: id }),
+    ).not.toThrow();
   });
 });
