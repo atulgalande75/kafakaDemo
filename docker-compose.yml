@@ -1,0 +1,59 @@
+# Local infrastructure for the order pipeline demo.
+#   Kafka    -> localhost:9092 (single-node KRaft: broker + controller, no ZooKeeper)
+#   Kafka UI -> http://localhost:8080
+#
+# Topics are created by the services on startup (see packages/contracts/src/topics.ts),
+# so auto-topic-creation is disabled to keep the topic layout explicit.
+name: orderflow
+
+services:
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: orderflow-kafka
+    ports:
+      - '9092:9092'
+    environment:
+      CLUSTER_ID: ClGUe3U5ITEEHUw7hFnZgw
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # INTERNAL is used by containers (Kafka UI), EXTERNAL by the Node services on the host.
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          '/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1',
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  kafka-ui:
+    image: ${KAFKA_UI_IMAGE:-ghcr.io/kafbat/kafka-ui:v1.4.2}
+    container_name: orderflow-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - '8080:8080'
+    environment:
+      KAFKA_CLUSTERS_0_NAME: orderflow
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: 'false'
+
+volumes:
+  kafka-data:
