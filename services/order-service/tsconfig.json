@@ -16,6 +16,9 @@
     },
     {
       "path": "../../packages/auth"
+    },
+    {
+      "path": "../../packages/feature-flags"
     }
   ]
 }

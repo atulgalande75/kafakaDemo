@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
-import { EventTypes, Topics, createEvent, type AnyEvent } from '@orderflow/contracts';
+import {
+  EventTypes,
+  Topics,
+  createEvent,
+  type AnyEvent,
+  type CustomerTier,
+} from '@orderflow/contracts';
 import type { EventProducer, HandlerContext } from '@orderflow/kafka-utils';
+import { LocalFeatureFlags, type FlagValues } from '@orderflow/feature-flags';
+import { fraudCheck } from './fraud.js';
 import { createPaymentHandlers } from './handlers.js';
 import { PaymentGatewayError, chargeCard, type PaymentSettings } from './payment.js';
 
@@ -10,7 +18,7 @@ const settings: PaymentSettings = { failureRate: 0, declineRate: 0, cardLimit: 2
 const orderData = (totalAmount = 50) => ({
   orderId: randomUUID(),
   customerId: 'c-1',
-  customerTier: 'standard' as const,
+  customerTier: 'standard' as CustomerTier,
   country: 'US',
   items: [{ sku: 'SKU-MOUSE', quantity: 2, unitPrice: totalAmount / 2 }],
   totalAmount,
@@ -45,15 +53,25 @@ describe('chargeCard', () => {
 });
 
 describe('payment handler', () => {
-  function run(data: ReturnType<typeof orderData>, s = settings) {
+  function run(data: ReturnType<typeof orderData>, flagValues: Partial<FlagValues> = {}) {
+    const flags = new LocalFeatureFlags({
+      logger: pino({ level: 'silent' }),
+      env: {},
+      values: flagValues,
+    });
     const published: Array<{ topic: string; event: AnyEvent; key: string }> = [];
     const publish: EventProducer['publish'] = (topic, event, { key }) => {
       published.push({ topic, event: event as AnyEvent, key });
       return Promise.resolve([]);
     };
     const producer = { publish: vi.fn(publish) };
-    const source = createEvent(EventTypes.OrderCreated, data, { correlationId: 'corr-9' });
-    const handler = createPaymentHandlers(producer, s)[Topics.OrdersCreated]!;
+    const source = createEvent(EventTypes.OrderCreated, data, {
+      correlationId: 'corr-9',
+      actor: { sub: 'alice', clientId: 'orderflow-cli' },
+    });
+    const handler = createPaymentHandlers(producer, flags, { declineRate: 0, cardLimit: 2000 })[
+      Topics.OrdersCreated
+    ]!;
     return { published, source, done: handler(source, ctx) };
   }
 
@@ -85,8 +103,55 @@ describe('payment handler', () => {
           return Promise.resolve([]);
         },
       },
+      new LocalFeatureFlags({ logger: pino({ level: 'silent' }), env: {} }),
       settings,
     )[Topics.OrdersCreated]!;
     await handler(first.source, ctx);
+  });
+
+  it('propagates the actor from orders.created', async () => {
+    const { published, done } = run(orderData());
+    await done;
+    expect(published[0]?.event.actor).toEqual({ sub: 'alice', clientId: 'orderflow-cli' });
+  });
+
+  it('throws a transient error when the payment-failure-rate flag says so (chaos)', async () => {
+    const { published, done } = run(orderData(), { 'payment-failure-rate': 1 });
+    await expect(done).rejects.toThrow(PaymentGatewayError);
+    expect(published).toHaveLength(0);
+  });
+
+  it('skips the fraud check unless fraud-check-enabled is on', async () => {
+    const bigStandardOrder = orderData(1500);
+    const off = run(bigStandardOrder);
+    await off.done;
+    expect(off.published[0]?.topic).toBe('payments.completed');
+
+    const on = run(bigStandardOrder, { 'fraud-check-enabled': true });
+    await on.done;
+    expect(on.published[0]).toMatchObject({
+      topic: 'payments.failed',
+      event: { data: { reason: expect.stringContaining('Fraud check failed') as unknown } },
+    });
+  });
+});
+
+describe('fraudCheck', () => {
+  const order = (overrides: Partial<ReturnType<typeof orderData>>) => ({
+    ...orderData(),
+    ...overrides,
+  });
+
+  it('applies per-tier limits', () => {
+    expect(fraudCheck(order({ totalAmount: 1500 })).passed).toBe(false);
+    expect(fraudCheck(order({ totalAmount: 1500, customerTier: 'gold' })).passed).toBe(true);
+    expect(fraudCheck(order({ totalAmount: 99999, customerTier: 'platinum' })).passed).toBe(true);
+  });
+
+  it('blocks unknown countries', () => {
+    expect(fraudCheck(order({ country: 'ZZ' }))).toEqual({
+      passed: false,
+      reason: 'country ZZ is not supported',
+    });
   });
 });

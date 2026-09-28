@@ -9,13 +9,7 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     {
-      "path": "../../packages/contracts"
-    },
-    {
-      "path": "../../packages/kafka-utils"
-    },
-    {
-      "path": "../../packages/feature-flags"
+      "path": "../contracts"
     }
   ]
 }

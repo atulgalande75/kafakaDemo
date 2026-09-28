@@ -1,0 +1,22 @@
+{
+  "name": "@orderflow/feature-flags",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Typed feature flags: LaunchDarkly server SDK, or a local JSON/env provider",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@orderflow/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@launchdarkly/node-server-sdk": "^9.13.7",
+    "@orderflow/contracts": "^0.1.0",
+    "pino": "^10.3.1"
+  }
+}

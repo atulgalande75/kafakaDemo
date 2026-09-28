@@ -36,4 +36,10 @@ describe('renderNotification', () => {
       `Payment received for order ${orderId.slice(0, 8)}`,
     );
   });
+
+  it('uses the channel from the notification-channel flag', () => {
+    const event = createEvent(EventTypes.PaymentFailed, { orderId, reason: 'x' }, opts);
+    expect(renderNotification(event).channel).toBe('email');
+    expect(renderNotification(event, 'sms').channel).toBe('sms');
+  });
 });

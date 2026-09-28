@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import {
   decodeEvent,
   dlqTopic,
+  type AnyEvent,
   type DlqRecord,
   type EventForTopic,
   type Topic,
@@ -37,6 +38,11 @@ export interface ProcessDeps {
   idempotency: IdempotencyStore;
   producer: Pick<EventProducer, 'sendRaw'>;
   logger: Logger;
+  /**
+   * Retries allowed for this event, resolved per message (e.g. from the
+   * max-retry-attempts feature flag). Falls back to `retry.maxRetries`.
+   */
+  maxRetries?: (event: AnyEvent) => Promise<number>;
   sleep?: (ms: number) => Promise<void>;
   heartbeat?: () => Promise<void>;
   random?: () => number;
@@ -90,7 +96,10 @@ export async function processMessage(
     return 'duplicate';
   }
 
-  const maxAttempts = deps.retry.maxRetries + 1;
+  const maxRetries = deps.maxRetries
+    ? await deps.maxRetries(event as AnyEvent).catch(() => deps.retry.maxRetries)
+    : deps.retry.maxRetries;
+  const maxAttempts = maxRetries + 1;
   for (let attempt = 1; ; attempt++) {
     try {
       await handler(event, {
@@ -217,6 +226,8 @@ export interface EventConsumerOptions {
   producer: EventProducer;
   logger: Logger;
   retry?: RetryPolicy;
+  /** See {@link ProcessDeps.maxRetries}. */
+  maxRetries?: (event: AnyEvent) => Promise<number>;
   idempotency?: IdempotencyStore;
   /** Where a brand-new consumer group starts. Default: earliest, so nothing is missed. */
   fromBeginning?: boolean;
@@ -225,6 +236,13 @@ export interface EventConsumerOptions {
 export interface EventConsumer {
   start(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Stops fetching without leaving the group: partitions stay assigned, offsets stay
+   * put and lag builds up until {@link resume}. Safe to call before start().
+   */
+  pause(): void;
+  resume(): void;
+  readonly paused: boolean;
 }
 
 /** Consumer-group wrapper around {@link processMessage}. */
@@ -241,6 +259,7 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
     producer,
     logger,
     retry: options.retry ?? DEFAULT_RETRY_POLICY,
+    maxRetries: options.maxRetries,
     idempotency: options.idempotency ?? new InMemoryIdempotencyStore(),
     // Abort backoff sleeps on shutdown: the message is left uncommitted and redelivered later.
     sleep: (ms) => sleep(ms, stopping.signal),
@@ -256,7 +275,26 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
     logger.error({ err: payload.error, restart: payload.restart }, 'consumer crashed');
   });
 
+  let paused = false;
+  let running = false;
+  const topicList = () => topics.map((topic) => ({ topic }));
+
   return {
+    get paused() {
+      return paused;
+    },
+    pause() {
+      if (paused) return;
+      paused = true;
+      if (running) consumer.pause(topicList());
+      logger.warn({ topics }, 'consumer PAUSED - messages will queue up as lag');
+    },
+    resume() {
+      if (!paused) return;
+      paused = false;
+      if (running) consumer.resume(topicList());
+      logger.info({ topics }, 'consumer RESUMED');
+    },
     async start() {
       await consumer.connect();
       await consumer.subscribe({ topics, fromBeginning });
@@ -269,7 +307,9 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
           );
         },
       });
-      logger.info({ topics }, 'consumer started');
+      running = true;
+      if (paused) consumer.pause(topicList());
+      logger.info({ topics, paused }, 'consumer started');
     },
     async stop() {
       stopping.abort();

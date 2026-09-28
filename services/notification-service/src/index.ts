@@ -1,5 +1,11 @@
 import { ConsumerGroups, Topics } from '@orderflow/contracts';
 import {
+  createFeatureFlags,
+  eventContext,
+  orderContext,
+  type FeatureFlags,
+} from '@orderflow/feature-flags';
+import {
   createEventConsumer,
   createEventProducer,
   createKafka,
@@ -14,17 +20,22 @@ import { renderNotification, type OutcomeEvent } from './notifications.js';
 
 const logger = createLogger('notification-service');
 
-/** "Sends" a notification - for the demo, it is simply logged. */
-const notify = (event: OutcomeEvent, { log }: HandlerContext) => {
-  const notification = renderNotification(event);
-  log.info(
-    { orderId: notification.orderId, channel: notification.channel, body: notification.body },
-    `notification: ${notification.subject}`,
-  );
-  return Promise.resolve();
-};
+/** "Sends" a notification on the channel chosen by the notification-channel flag - logged for the demo. */
+const createNotifier =
+  (flags: FeatureFlags) =>
+  async (event: OutcomeEvent, { log }: HandlerContext) => {
+    const channel = await flags.get('notification-channel', orderContext(event.data));
+    const notification = renderNotification(event, channel);
+    log.info(
+      { orderId: notification.orderId, channel, body: notification.body },
+      `[${channel}] ${notification.subject}`,
+    );
+  };
 
 async function main() {
+  const flags = await createFeatureFlags({ logger, service: 'notification-service' });
+  const notify = createNotifier(flags);
+
   const kafka = createKafka({ clientId: 'notification-service', logger });
   await ensureTopics(kafka, logger);
 
@@ -38,6 +49,7 @@ async function main() {
     producer,
     logger,
     retry: retryPolicyFromEnv(),
+    maxRetries: (event) => flags.get('max-retry-attempts', eventContext(event)),
     handlers: {
       [Topics.PaymentsCompleted]: notify,
       [Topics.PaymentsFailed]: notify,
@@ -49,6 +61,7 @@ async function main() {
     logger,
     () => consumer.stop(),
     () => producer.disconnect(),
+    () => flags.close(),
   );
   await consumer.start();
 }
