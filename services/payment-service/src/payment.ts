@@ -1,7 +1,10 @@
 import type { OrderCreatedEvent } from '@orderflow/contracts';
 
 export interface PaymentSettings {
-  /** Probability (0-1) that the gateway call throws a transient error - the chaos toggle. */
+  /**
+   * Probability (0-1) that the gateway call throws a transient error - the chaos
+   * toggle, read per order from the payment-failure-rate feature flag.
+   */
   failureRate: number;
   /** Probability (0-1) that the card is declined (a business outcome, not an error). */
   declineRate: number;
@@ -17,7 +20,7 @@ export class PaymentGatewayError extends Error {
 }
 
 /**
- * Simulates calling a payment gateway. With PAYMENT_FAILURE_RATE > 0 some calls
+ * Simulates calling a payment gateway. With payment-failure-rate > 0 some calls
  * fail with a transient error to exercise retries, backoff and the DLQ.
  */
 export function chargeCard(
@@ -26,7 +29,7 @@ export function chargeCard(
   random: () => number = Math.random,
 ): PaymentDecision {
   if (random() < settings.failureRate) {
-    throw new PaymentGatewayError('Payment gateway timeout (chaos: PAYMENT_FAILURE_RATE)');
+    throw new PaymentGatewayError('Payment gateway timeout (chaos: payment-failure-rate flag)');
   }
   if (order.totalAmount > settings.cardLimit) {
     return {

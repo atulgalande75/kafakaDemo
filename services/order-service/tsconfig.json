@@ -7,5 +7,18 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../../packages/contracts" }, { "path": "../../packages/kafka-utils" }]
+  "references": [
+    {
+      "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../packages/kafka-utils"
+    },
+    {
+      "path": "../../packages/auth"
+    },
+    {
+      "path": "../../packages/feature-flags"
+    }
+  ]
 }

@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { envelopeSchema } from './envelope.js';
+import { envelopeSchema, type Actor } from './envelope.js';
 import {
   eventSchemas,
   topicEventType,
-  type DataOf,
+  type DataInputOf,
   type EventForTopic,
   type EventOf,
   type EventType,
@@ -24,6 +24,8 @@ export class InvalidEventError extends Error {
 
 export interface CreateEventOptions {
   correlationId: string;
+  /** Who initiated the flow; copy it from the causing event when reacting to one. */
+  actor?: Actor;
   eventId?: string;
   occurredAt?: Date;
 }
@@ -44,7 +46,7 @@ export function deriveEventId(causationEventId: string, name: string): string {
 /** Creates a new, schema-validated event envelope. */
 export function createEvent<T extends EventType>(
   type: T,
-  data: DataOf<T>,
+  data: DataInputOf<T>,
   options: CreateEventOptions,
 ): EventOf<T> {
   const candidate = {
@@ -53,6 +55,7 @@ export function createEvent<T extends EventType>(
     version: 1,
     occurredAt: (options.occurredAt ?? new Date()).toISOString(),
     correlationId: options.correlationId,
+    ...(options.actor && { actor: { sub: options.actor.sub, clientId: options.actor.clientId } }),
     data,
   };
   return eventSchemas[type].parse(candidate) as EventOf<T>;

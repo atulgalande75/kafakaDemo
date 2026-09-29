@@ -16,6 +16,8 @@ import {
 const orderData = () => ({
   orderId: randomUUID(),
   customerId: 'cust-1',
+  customerTier: 'standard' as const,
+  country: 'US',
   items: [{ sku: 'SKU-KEYBOARD', quantity: 2, unitPrice: 49.5 }],
   totalAmount: 99,
   currency: 'USD',
@@ -100,5 +102,38 @@ describe('deriveEventId', () => {
     expect(() =>
       createEvent(EventTypes.OrderCreated, orderData(), { correlationId: 'c', eventId: id }),
     ).not.toThrow();
+  });
+});
+
+describe('actor', () => {
+  it('carries only sub and clientId', () => {
+    const actor = { sub: 'user-1', clientId: 'orderflow-cli' };
+    const event = createEvent(EventTypes.OrderCreated, orderData(), { correlationId: 'c', actor });
+    expect(event.actor).toEqual(actor);
+  });
+
+  it('never copies extra fields such as a token into the event', () => {
+    const actor = { sub: 'user-1', clientId: 'cli', token: 'eyJhbGciOi.secret.sig' };
+    const event = createEvent(EventTypes.OrderCreated, orderData(), { correlationId: 'c', actor });
+    expect(serializeEvent(event)).not.toContain('eyJhbGciOi');
+  });
+
+  it('rejects envelopes whose actor has unknown fields', () => {
+    const event = createEvent(EventTypes.OrderCreated, orderData(), { correlationId: 'c' });
+    const withToken = { ...event, actor: { sub: 's', clientId: 'c', accessToken: 'x' } };
+    expect(() => decodeEvent(Topics.OrdersCreated, JSON.stringify(withToken))).toThrow(
+      InvalidEventError,
+    );
+  });
+
+  it('still accepts events without an actor or the newer order fields', () => {
+    const event = createEvent(EventTypes.OrderCreated, orderData(), { correlationId: 'c' });
+    const { customerTier, country, ...legacyData } = event.data;
+    const decoded = decodeEvent(
+      Topics.OrdersCreated,
+      JSON.stringify({ ...event, data: legacyData }),
+    );
+    expect(decoded.actor).toBeUndefined();
+    expect(decoded.data).toMatchObject({ customerTier: 'standard', country: 'US' });
   });
 });

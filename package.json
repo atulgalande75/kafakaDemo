@@ -28,7 +28,8 @@
     "infra:down": "docker compose down -v",
     "lag": "docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group order-service --group payment-service --group inventory-service --group notification-service",
     "load": "npm run start --silent -w @orderflow/load-generator --",
-    "dlq:replay": "npm run start --silent -w @orderflow/dlq-replay --"
+    "dlq:replay": "npm run start --silent -w @orderflow/dlq-replay --",
+    "flag": "node scripts/flag.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

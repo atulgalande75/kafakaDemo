@@ -4,21 +4,34 @@ A small but realistic Kafka demo in **Node.js + TypeScript**. Orders flow throug
 four services that talk only through Kafka topics, with the reliability patterns
 you need in real systems: keyed partitioning, consumer groups, retries with
 exponential backoff, dead-letter queues, DLQ replay and idempotent consumers.
+The API is protected with **OAuth2/OIDC** (Keycloak, JWTs checked against its JWKS),
+and runtime behaviour is controlled by **feature flags** (LaunchDarkly, with a local
+fallback that needs no account).
 
 ```bash
-docker compose up -d   # Kafka (KRaft) + Kafka UI
+docker compose up -d   # Kafka (KRaft) + Kafka UI + Keycloak
 npm run dev            # installs dependencies on first run, then starts all four services
 ```
 
-Then create an order and watch it move through the pipeline:
+Then get a token and create an order:
 
 ```bash
-curl -s -X POST localhost:3000/orders -H 'content-type: application/json' \
-  -d '{"customerId":"alice","items":[{"sku":"SKU-KEYBOARD","quantity":1,"unitPrice":79.99}]}'
+TOKEN=$(curl -s -d grant_type=password -d client_id=orderflow-cli -d username=alice -d password=alice \
+  localhost:8081/realms/orderflow/protocol/openid-connect/token | node -pe 'JSON.parse(require("fs").readFileSync(0)).access_token')
+
+curl -s -X POST localhost:3000/orders -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"customerId":"alice","customerTier":"gold","country":"DE","items":[{"sku":"SKU-KEYBOARD","quantity":1,"unitPrice":79.99}]}'
 ```
 
-Kafka UI runs at <http://localhost:8080>. For a guided tour of happy path, outage,
-poison messages, DLQ replay and duplicates, see **[docs/demo-script.md](docs/demo-script.md)**.
+Or just run `npm run load -- --wait`: the load generator gets its own token.
+
+| UI       | URL                     | Login           |
+| -------- | ----------------------- | --------------- |
+| Kafka UI | <http://localhost:8080> | –               |
+| Keycloak | <http://localhost:8081> | `admin`/`admin` |
+
+For a guided tour of happy path, outage, poison messages, DLQ replay, duplicates,
+authentication and feature flags, see **[docs/demo-script.md](docs/demo-script.md)**.
 
 ## Architecture
 
@@ -26,10 +39,12 @@ poison messages, DLQ replay and duplicates, see **[docs/demo-script.md](docs/dem
 flowchart LR
     client([HTTP client /<br/>load-generator])
     order["<b>order-service</b><br/>Fastify API + order saga"]
-    payment["<b>payment-service</b><br/>chaos: PAYMENT_FAILURE_RATE"]
+    payment["<b>payment-service</b><br/>chaos + fraud check via flags"]
     inventory["<b>inventory-service</b>"]
     notification["<b>notification-service</b><br/>logs notifications"]
     replayTool([dlq-replay])
+    keycloak{{"Keycloak<br/>OAuth2 / OIDC"}}
+    flags{{"LaunchDarkly or<br/>feature-flags.json"}}
 
     oc[["orders.created"]]
     pay[["payments.completed<br/>payments.failed"]]
@@ -50,14 +65,20 @@ flowchart LR
     inventory -. "poison message or<br/>retries exhausted" .-> dlq
     dlq -.-> replayTool
     replayTool -. "republish original<br/>key, value, headers" .-> oc
+    keycloak -. "JWT" .-> client
+    keycloak -. "JWKS" .-> order
+    flags -. "flags" .-> payment
 
     classDef topic fill:#fff4dd,stroke:#d4a017,color:#333
     classDef dead fill:#fde2e2,stroke:#c0392b,color:#333
+    classDef ext fill:#e8f0fe,stroke:#4a6fa5,color:#333
     class oc,pay,inv topic
     class dlq dead
+    class keycloak,flags ext
 ```
 
-Topics are yellow, the dead-letter queue is red. Each service has its own consumer
+Topics are yellow, the dead-letter queue is red, and external systems are blue.
+Every service reads feature flags (only the payment edge is drawn). Each service has its own consumer
 group (named after the service), and every topic has 3 partitions keyed by
 `orderId`. Every consumer follows the same rules: a message it can't decode, or
 one that still fails after its retries, goes to `<topic>.dlq`. The diagram shows
@@ -99,13 +120,18 @@ sequenceDiagram
 | ------------------------------- | -------------------------------------------------------------------------------------------- |
 | `packages/contracts`            | Event envelope, zod schemas per event type, topic names, `createEvent` / `decodeEvent`       |
 | `packages/kafka-utils`          | kafkajs client, producer, consumer wrapper (retries, backoff, DLQ, idempotency), logging     |
+| `packages/auth`                 | JWT verification via JWKS (`jose`), Fastify plugin with `requireScope()`, client credentials |
+| `packages/feature-flags`        | `FeatureFlags` interface: LaunchDarkly provider and a local JSON/env provider                |
 | `services/order-service`        | Fastify API (`POST /orders`, `GET /orders/:id`) and the order state machine                  |
 | `services/payment-service`      | Charges orders; has the chaos toggle                                                         |
 | `services/inventory-service`    | Reserves stock (all-or-nothing)                                                              |
 | `services/notification-service` | Logs a customer notification for every outcome                                               |
 | `tools/load-generator`          | Generates orders over HTTP, duplicates, or poison messages; waits and summarizes the results |
 | `tools/dlq-replay`              | Inspects DLQs and replays records to their original topic                                    |
+| `infra/keycloak`                | Importable Keycloak realm (clients, scopes, demo users)                                      |
+| `feature-flags.json`            | Local flag values, used when `LD_SDK_KEY` is not set                                         |
 | `docs/demo-script.md`           | Step-by-step demo                                                                            |
+| `docs/ld-flags.md`              | Feature flags, LaunchDarkly setup and targeting                                              |
 
 ## Topics
 
@@ -137,9 +163,12 @@ Every message value is a JSON envelope, validated with zod on the way out
   "version": 1,
   "occurredAt": "2026-09-28T10:01:59.260Z",
   "correlationId": "smoke-1",
+  "actor": { "sub": "862ea51e-9ea5-49f7-b730-589f6213adc6", "clientId": "orderflow-cli" },
   "data": {
     "orderId": "f43d58d0-856a-4a56-9f96-6b5c5c89401f",
     "customerId": "alice",
+    "customerTier": "gold",
+    "country": "DE",
     "items": [{ "sku": "SKU-MOUSE", "quantity": 1, "unitPrice": 25 }],
     "totalAmount": 25,
     "currency": "USD"
@@ -151,6 +180,10 @@ Every message value is a JSON envelope, validated with zod on the way out
 - **correlationId** comes from the `x-correlation-id` request header (or is generated)
   and is copied onto every downstream event, so you can grep one order's whole
   journey across all service logs.
+- **actor** is who placed the order: the token's `sub` and client (`azp`). Services
+  copy it onto every event they emit in reaction. It's identity only. **Access
+  tokens never go into events.** The schema is strict, so an actor with any extra
+  field (such as a token) is rejected.
 - **version** is checked per type; an unknown version is rejected into the DLQ
   instead of being half-understood.
 - `event-id`, `event-type`, `event-version` and `correlation-id` are also set as
@@ -175,7 +208,8 @@ All of these live in [`packages/kafka-utils/src/consumer.ts`](packages/kafka-uti
    in-process: `initial × 2^(n-1)`, capped, ±20% jitter, and it heartbeats while
    waiting so the consumer isn't kicked out of the group. A `NonRetryableError`
    skips the retries.
-4. **Dead-letter queue.** After `CONSUMER_MAX_RETRIES` the message goes to
+4. **Dead-letter queue.** After `max-retry-attempts` retries (a feature flag, default
+   3, resolved per message) the message goes to
    `<topic>.dlq` as a record with the error, the attempt count, the consumer group,
    and the original topic/partition/offset/key/headers/value. The original offset is
    then committed. If the DLQ itself can't be written, the offset is _not_ committed
@@ -192,35 +226,103 @@ function: `PENDING` until both answers arrive, then `CONFIRMED` if payment compl
 **and** stock was reserved, or `CANCELLED` as soon as either fails. Final states
 stay final, and applying the same event twice does nothing.
 
+## Security: OAuth2 / OIDC
+
+Keycloak runs in docker-compose and imports
+[`infra/keycloak/realm-export.json`](infra/keycloak/realm-export.json) (realm
+`orderflow`). order-service verifies every bearer token locally against Keycloak's
+JWKS with [`jose`](https://github.com/panva/jose). It checks the signature, `iss`,
+`aud = order-service`, `exp` and `sub`, and never calls Keycloak per request.
+
+| Client           | Type                       | Scopes                       | Used by                                                 |
+| ---------------- | -------------------------- | ---------------------------- | ------------------------------------------------------- |
+| `order-service`  | resource server            | –                            | the token audience (`aud`)                              |
+| `load-generator` | confidential, client creds | `orders:read` `orders:write` | `tools/load-generator`                                  |
+| `dlq-replay`     | confidential, client creds | `admin`                      | `tools/dlq-replay` (operator)                           |
+| `orderflow-cli`  | public, password grant     | `orders:read` `orders:write` | humans with `curl` (users `alice`/`alice`, `bob`/`bob`) |
+
+Each scope adds `order-service` to the token's `aud`. A client can only get the
+scopes it is assigned; for example, load-generator asking for `admin` gets
+`invalid_scope`.
+
+| Route                        | Requires                                                    |
+| ---------------------------- | ----------------------------------------------------------- |
+| `POST /orders`               | `orders:write`                                              |
+| `GET /orders/:id`            | `orders:read` **and** being the order's creator, or `admin` |
+| `GET /orders`                | `orders:read` (own orders) or `admin` (all orders)          |
+| `POST /orders/:id/republish` | `orders:write` and being the creator, or `admin`            |
+| `GET /health`                | nothing                                                     |
+
+Errors follow RFC 6750:
+
+| Status | When                                                    | Body `error`              | `WWW-Authenticate`                               |
+| ------ | ------------------------------------------------------- | ------------------------- | ------------------------------------------------ |
+| 401    | no token                                                | `invalid_request`         | `Bearer realm="orderflow"`                       |
+| 401    | malformed, bad signature, expired, wrong `iss` or `aud` | `invalid_token`           | `… error="invalid_token", error_description="…"` |
+| 403    | valid token without the required scope                  | `insufficient_scope`      | `… error="insufficient_scope", scope="…"`        |
+| 403    | valid token, but someone else's order                   | `access_denied`           | –                                                |
+| 503    | Keycloak's JWKS unreachable (can't verify)              | `temporarily_unavailable` | – (`Retry-After: 5`)                             |
+
+The tools use the OAuth2 client-credentials flow with a cached token
+(`ClientCredentialsTokenProvider`). dlq-replay refuses to run unless its token
+carries `admin`. It uses that token to show each dead-lettered order's current
+status, and stamps replayed messages with a `replayed-by` header.
+
+## Feature flags
+
+| Flag                       | Type    | Default | Effect                                                                             |
+| -------------------------- | ------- | ------- | ---------------------------------------------------------------------------------- |
+| `payment-failure-rate`     | number  | `0`     | Chaos: share of payment gateway calls that throw (replaces `PAYMENT_FAILURE_RATE`) |
+| `payment-consumer-enabled` | boolean | `true`  | `false` pauses the payment consumer live (lag builds up)                           |
+| `fraud-check-enabled`      | boolean | `false` | Adds a fraud-check step in payment-service                                         |
+| `notification-channel`     | string  | `email` | `email` / `sms` / `push` / `slack`                                                 |
+| `max-retry-attempts`       | number  | `3`     | Retries before a message is dead-lettered (every consumer)                         |
+
+With `LD_SDK_KEY` set, flags come from LaunchDarkly and are evaluated per order
+(context kind `order`: key orderId, attributes `customerTier`, `country`). Without
+a key, they come from `feature-flags.json`, which you can edit live, plus `FLAG_*`
+env vars. Every flag has a safe default, so the pipeline keeps working if
+LaunchDarkly is down or misconfigured. See **[docs/ld-flags.md](docs/ld-flags.md)**.
+
 ## Configuration
 
 Everything has a sensible default. To override values, copy `.env.example` to `.env`
 (`npm run dev` loads it) or set environment variables.
 
-| Variable                    | Default          | Used by         | Meaning                                                             |
-| --------------------------- | ---------------- | --------------- | ------------------------------------------------------------------- |
-| `KAFKA_BROKERS`             | `localhost:9092` | all             | Comma-separated bootstrap brokers                                   |
-| `ORDER_SERVICE_PORT`        | `3000`           | order-service   | HTTP port                                                           |
-| `PAYMENT_FAILURE_RATE`      | `0`              | payment-service | **Chaos toggle**: probability (0–1) that a gateway call throws      |
-| `PAYMENT_DECLINE_RATE`      | `0`              | payment-service | Probability that a card is randomly declined (→ `payments.failed`)  |
-| `PAYMENT_CARD_LIMIT`        | `2000`           | payment-service | Orders above this amount are always declined                        |
-| `CONSUMER_MAX_RETRIES`      | `3`              | all consumers   | Retries after the first attempt before dead-lettering               |
-| `CONSUMER_INITIAL_RETRY_MS` | `200`            | all consumers   | First backoff delay                                                 |
-| `CONSUMER_MAX_RETRY_MS`     | `5000`           | all consumers   | Backoff cap                                                         |
-| `LOG_LEVEL`                 | `info`           | all             | pino level (`debug` shows every publish)                            |
-| `LOG_FORMAT`                | pretty           | all             | `json` for newline-delimited JSON (also when `NODE_ENV=production`) |
-| `KAFKAJS_DEBUG`             | unset            | all             | Set to anything to see kafkajs internals                            |
-| `KAFKA_UI_IMAGE`            | kafbat v1.4.2    | docker compose  | Override the Kafka UI image                                         |
+| Variable                           | Default                                  | Used by         | Meaning                                                                                     |
+| ---------------------------------- | ---------------------------------------- | --------------- | ------------------------------------------------------------------------------------------- |
+| `KAFKA_BROKERS`                    | `localhost:9092`                         | all             | Comma-separated bootstrap brokers                                                           |
+| `ORDER_SERVICE_PORT`               | `3000`                                   | order-service   | HTTP port                                                                                   |
+| `PAYMENT_DECLINE_RATE`             | `0`                                      | payment-service | Probability that a card is randomly declined (→ `payments.failed`)                          |
+| `PAYMENT_CARD_LIMIT`               | `2000`                                   | payment-service | Orders above this amount are always declined                                                |
+| `CONSUMER_INITIAL_RETRY_MS`        | `200`                                    | all consumers   | First backoff delay                                                                         |
+| `CONSUMER_MAX_RETRY_MS`            | `5000`                                   | all consumers   | Backoff cap                                                                                 |
+| `LOG_LEVEL`                        | `info`                                   | all             | pino level (`debug` shows every publish)                                                    |
+| `LOG_FORMAT`                       | pretty                                   | all             | `json` for newline-delimited JSON (also when `NODE_ENV=production`)                         |
+| `KAFKAJS_DEBUG`                    | unset                                    | all             | Set to anything to see kafkajs internals                                                    |
+| `AUTH_ISSUER`                      | `http://localhost:8081/realms/orderflow` | all             | Expected `iss`; JWKS and token URLs are derived from it (`AUTH_JWKS_URI`, `AUTH_TOKEN_URL`) |
+| `AUTH_AUDIENCE`                    | `order-service`                          | order-service   | Expected `aud`                                                                              |
+| `LOADGEN_CLIENT_ID` / `_SECRET`    | demo values                              | load-generator  | Client credentials (demo secret from the realm file)                                        |
+| `DLQ_REPLAY_CLIENT_ID` / `_SECRET` | demo values                              | dlq-replay      | Client credentials (demo secret from the realm file)                                        |
+| `LD_SDK_KEY`                       | unset                                    | all             | LaunchDarkly server-side SDK key; unset = local flags                                       |
+| `FEATURE_FLAGS_FILE`               | `./feature-flags.json`                   | all             | Local flag file (watched for changes)                                                       |
+| `FLAG_<KEY>`                       | unset                                    | all             | Local flag override, e.g. `FLAG_PAYMENT_FAILURE_RATE=0.5`                                   |
+| `KAFKA_UI_IMAGE`                   | kafbat v1.4.2                            | docker compose  | Override the Kafka UI image                                                                 |
+| `KEYCLOAK_IMAGE`                   | `quay.io/keycloak/keycloak:26.4`         | docker compose  | Override the Keycloak image                                                                 |
 
 ## HTTP API (order-service)
 
-| Method & path                | Description                                                                             |
-| ---------------------------- | --------------------------------------------------------------------------------------- |
-| `POST /orders`               | Body `{ customerId, items: [{ sku, quantity, unitPrice }], currency? }` → `202` + order |
-| `GET /orders/:id`            | Current order state, payment/inventory status and an event history                      |
-| `GET /orders?limit=20`       | Most recent orders                                                                      |
-| `POST /orders/:id/republish` | **Demo only**: republishes the original `orders.created` event (same eventId)           |
-| `GET /health`                | Liveness                                                                                |
+| Method & path                | Description                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `POST /orders`               | Body `{ customerId, items: [{ sku, quantity, unitPrice }], customerTier?, country?, currency? }` → `202` + order |
+| `GET /orders/:id`            | Current order state, payment/inventory status and an event history                                               |
+| `GET /orders?limit=20`       | Most recent orders                                                                                               |
+| `POST /orders/:id/republish` | **Demo only**: republishes the original `orders.created` event (same eventId)                                    |
+| `GET /health`                | Liveness                                                                                                         |
+
+All routes except `/health` need a bearer token; see [Security](#security-oauth2--oidc).
+`customerTier` is `standard` (default), `gold` or `platinum`, and `country` is an ISO
+code (default `US`). Both feed feature-flag targeting.
 
 Stock (see [`inventory.ts`](services/inventory-service/src/inventory.ts)):
 `SKU-KEYBOARD`, `SKU-MOUSE`, `SKU-MONITOR`, `SKU-LAPTOP`, `SKU-HEADSET`, `SKU-WEBCAM`
@@ -234,9 +336,10 @@ npm run load                                        # 20 orders at 5/s
 npm run load -- -n 200 -r 50 --scenario mixed --wait # includes out-of-stock + over-limit orders, prints a summary
 npm run load -- -n 5 --duplicate --wait              # publishes every orders.created twice
 npm run load -- --poison 5                           # writes 5 malformed messages to orders.created
+npm run load -- --tier standard --country BR --wait  # force the flag-targeting attributes
 
 npm run dlq:replay                                   # how many records each DLQ holds
-npm run dlq:replay -- -t orders.created.dlq --dry-run --reason all
+npm run dlq:replay -- -t orders.created.dlq --dry-run --reason all  # needs the admin scope (client "dlq-replay")
 npm run dlq:replay -- -t orders.created.dlq --group payment-service
 
 npm run lag                                          # consumer group offsets and lag
@@ -259,8 +362,10 @@ sources through a custom `@orderflow/source` export condition, so you don't need
 build step. `npm run build` + `npm start` run the compiled JavaScript instead.
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs lint, typecheck,
-tests and build. It then runs an end-to-end smoke test against a real Kafka
-broker: orders settle, duplicates are skipped, and poison messages reach the DLQ.
+tests and build. It then runs an end-to-end smoke test against a real Kafka broker
+and Keycloak: unauthenticated calls get 401, orders settle, duplicates are skipped,
+and poison messages reach the DLQ. It needs **no secrets**: the demo realm carries
+its own demo credentials, and without `LD_SDK_KEY` the local flag provider is used.
 
 ## Requirements
 
@@ -284,5 +389,12 @@ This is a demo, so some production concerns are simplified on purpose:
 - **Retries block the partition** while they back off. That's fine for short,
   transient failures. For long outages, use retry topics with delayed
   consumption instead.
+- **Demo identity setup.** Keycloak runs in dev mode (in-memory, re-imported on every
+  start, plain HTTP). The client secrets and user passwords in the realm file are
+  public demo values. The `orderflow-cli` password grant exists only so you can
+  `curl` as a user; real front ends use the authorization code flow with PKCE.
+- **Ownership is the token's `sub`.** Orders are owned by whoever created them.
+  `customerId` is just business data.
+- **Local flags have no targeting.** Per-tier or per-country rules need LaunchDarkly.
 - **kafkajs** is used as requested; it is stable but no longer actively developed.
   For new production work, consider `@confluentinc/kafka-javascript`.

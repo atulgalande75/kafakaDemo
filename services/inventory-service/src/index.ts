@@ -1,4 +1,5 @@
 import { ConsumerGroups } from '@orderflow/contracts';
+import { createFeatureFlags, eventContext } from '@orderflow/feature-flags';
 import {
   createEventConsumer,
   createEventProducer,
@@ -18,6 +19,7 @@ async function main() {
   const inventory = new Inventory();
   logger.info({ stock: inventory.snapshot() }, 'initial stock');
 
+  const flags = await createFeatureFlags({ logger, service: 'inventory-service' });
   const kafka = createKafka({ clientId: 'inventory-service', logger });
   await ensureTopics(kafka, logger);
 
@@ -30,12 +32,14 @@ async function main() {
     producer,
     logger,
     retry: retryPolicyFromEnv(),
+    maxRetries: (event) => flags.get('max-retry-attempts', eventContext(event)),
     handlers: createInventoryHandlers(producer, inventory),
   });
   onShutdown(
     logger,
     () => consumer.stop(),
     () => producer.disconnect(),
+    () => flags.close(),
   );
   await consumer.start();
 }

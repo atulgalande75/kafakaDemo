@@ -7,12 +7,14 @@
  *   npm run dlq:replay -- -t orders.created.dlq --group payment-service
  *
  * Replayed messages are published to their original topic with their original
- * key, value and headers (so the same eventId) plus replayed-from/replay-count.
+ * key, value and headers (so the same eventId) plus replayed-from/replay-count/replayed-by.
+ * Listing and replaying require an OAuth token with the `admin` scope (client credentials).
  */
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { TOPIC_SPECS, isDlqTopic, sourceTopicOf, type DlqRecord } from '@orderflow/contracts';
 import { createEventProducer, createKafka, createLogger } from '@orderflow/kafka-utils';
+import { authorizeOperator, orderStatus } from './operator.js';
 import { readPending } from './reader.js';
 import {
   describeRecord,
@@ -32,7 +34,12 @@ const USAGE = `Usage: npm run dlq:replay -- [options]
       --to <topic>         publish to this topic instead of the original one
       --dry-run            list matching records without replaying or committing
       --from-beginning     re-read the whole DLQ, including records replayed before
+      --url <url>          order-service URL for order status lookups (default http://localhost:3000)
   -h, --help
+
+Listing and replaying authenticate as the Keycloak client "dlq-replay" (client
+credentials) and require the "admin" scope. Override with DLQ_REPLAY_CLIENT_ID /
+DLQ_REPLAY_CLIENT_SECRET / AUTH_TOKEN_URL.
 
 Progress is tracked by the consumer group "dlq-replay.<dlq topic>", so each record
 is handled once; records that don't match the filters are skipped *and* marked
@@ -49,6 +56,7 @@ const { values } = parseArgs({
     to: { type: 'string' },
     'dry-run': { type: 'boolean', default: false },
     'from-beginning': { type: 'boolean', default: false },
+    url: { type: 'string', default: process.env.ORDER_SERVICE_URL ?? 'http://localhost:3000' },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -86,6 +94,16 @@ async function replay(dlq: string) {
   if (!REASONS.includes(reason)) throw new Error(`--reason must be one of ${REASONS.join(', ')}`);
   const limit = values.limit === undefined ? Infinity : Number(values.limit);
   if (!(limit > 0)) throw new Error('--limit must be a positive number');
+
+  const operator = await authorizeOperator();
+  console.log(`🔐 authorized as "${operator.clientId}" (scope: admin)`);
+  const orderServiceUrl = values.url.replace(/\/$/, '');
+  const withStatus = async (record: DlqRecord, line: string) => {
+    const status = record.original.key
+      ? await orderStatus(orderServiceUrl, operator, record.original.key)
+      : undefined;
+    return status ? `${line} | order ${status}` : line;
+  };
 
   const filter: ReplayFilter = { reason, consumerGroup: values.group };
   const dryRun = values['dry-run'];
@@ -129,12 +147,18 @@ async function replay(dlq: string) {
 
         const target = values.to ?? record.original.topic ?? sourceTopicOf(dlq);
         if (dryRun) {
-          console.log(`  • ${describeRecord(record, message.offset)}`);
+          console.log(`  • ${await withStatus(record, describeRecord(record, message.offset))}`);
         } else {
           await producer.sendRaw(target, [
-            toReplayMessage(record, { topic: dlq, partition, offset: message.offset }),
+            toReplayMessage(
+              record,
+              { topic: dlq, partition, offset: message.offset },
+              operator.clientId,
+            ),
           ]);
-          console.log(`  ↻ ${describeRecord(record, message.offset)} -> ${target}`);
+          console.log(
+            `  ↻ ${await withStatus(record, describeRecord(record, message.offset))} -> ${target}`,
+          );
         }
         counts.replayed++;
         byTarget[target] = (byTarget[target] ?? 0) + 1;

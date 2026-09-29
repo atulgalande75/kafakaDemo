@@ -19,6 +19,19 @@ describe('randomOrder', () => {
       { sku: 'SKU-LAPTOP', quantity: 2, unitPrice: 1499 },
     ]);
   });
+
+  it('picks a random tier and country unless overridden', () => {
+    // The first draw decides the tier; later draws vary so the item picker can progress.
+    const sequence = (first: number) => {
+      let i = 0;
+      return () => (i++ === 0 ? first : (i % 10) / 10);
+    };
+    expect(randomOrder('happy', sequence(0.95))).toMatchObject({ customerTier: 'platinum' });
+    expect(randomOrder('happy', sequence(0.1))).toMatchObject({ customerTier: 'standard' });
+    expect(
+      randomOrder('happy', Math.random, { customerTier: 'gold', country: 'DE' }),
+    ).toMatchObject({ customerTier: 'gold', country: 'DE' });
+  });
 });
 
 describe('poisonMessages', () => {

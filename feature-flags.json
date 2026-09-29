@@ -1,0 +1,7 @@
+{
+  "payment-failure-rate": 0,
+  "payment-consumer-enabled": true,
+  "fraud-check-enabled": false,
+  "notification-channel": "email",
+  "max-retry-attempts": 3
+}

@@ -1,3 +1,4 @@
+import type { NotificationChannel } from '@orderflow/feature-flags';
 import type {
   InventoryRejectedEvent,
   InventoryReservedEvent,
@@ -10,7 +11,7 @@ export type OutcomeEvent =
 
 export interface Notification {
   orderId: string;
-  channel: 'email';
+  channel: NotificationChannel;
   subject: string;
   body: string;
 }
@@ -18,9 +19,12 @@ export interface Notification {
 const short = (id: string) => id.slice(0, 8);
 
 /** Renders the customer notification for a payment or inventory outcome. */
-export function renderNotification(event: OutcomeEvent): Notification {
+export function renderNotification(
+  event: OutcomeEvent,
+  channel: NotificationChannel = 'email',
+): Notification {
   const { orderId } = event.data;
-  const base = { orderId, channel: 'email' as const };
+  const base = { orderId, channel };
   switch (event.type) {
     case 'payment.completed':
       return {

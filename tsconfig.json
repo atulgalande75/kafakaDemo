@@ -8,6 +8,12 @@
       "path": "packages/kafka-utils"
     },
     {
+      "path": "packages/auth"
+    },
+    {
+      "path": "packages/feature-flags"
+    },
+    {
       "path": "services/order-service"
     },
     {

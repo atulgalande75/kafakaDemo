@@ -186,6 +186,35 @@ describe('processMessage', () => {
     expect(await deps.idempotency.has(event.eventId)).toBe(false);
   });
 
+  it('resolves the retry limit per message (max-retry-attempts flag)', async () => {
+    const handler = vi.fn().mockRejectedValue(new Error('still down'));
+    const { deps, dlqRecords } = setup(
+      { [Topics.OrdersCreated]: handler },
+      { maxRetries: () => Promise.resolve(0) },
+    );
+    await processMessage(deps, {
+      topic: Topics.OrdersCreated,
+      partition: 0,
+      message: kafkaMessage(serializeEvent(orderCreated())),
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(dlqRecords()[0]).toMatchObject({ attempts: 1 });
+  });
+
+  it('falls back to the retry policy if resolving the limit fails', async () => {
+    const handler = vi.fn().mockRejectedValue(new Error('still down'));
+    const { deps } = setup(
+      { [Topics.OrdersCreated]: handler },
+      { maxRetries: () => Promise.reject(new Error('flags down')) },
+    );
+    await processMessage(deps, {
+      topic: Topics.OrdersCreated,
+      partition: 0,
+      message: kafkaMessage(serializeEvent(orderCreated())),
+    });
+    expect(handler).toHaveBeenCalledTimes(3); // policy: 2 retries
+  });
+
   it('does not retry NonRetryableError', async () => {
     const handler = vi.fn().mockRejectedValue(new NonRetryableError('unknown sku'));
     const { deps, dlqRecords } = setup({ [Topics.OrdersCreated]: handler });

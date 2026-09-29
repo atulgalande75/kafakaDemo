@@ -33,7 +33,8 @@ export function brokersFromEnv(): string[] {
 
 export function retryPolicyFromEnv(): RetryPolicy {
   return {
-    maxRetries: envNumber('CONSUMER_MAX_RETRIES', 3, { min: 0 }),
+    // Per-message retry count comes from the max-retry-attempts feature flag.
+    maxRetries: 3,
     initialDelayMs: envNumber('CONSUMER_INITIAL_RETRY_MS', 200, { min: 0 }),
     maxDelayMs: envNumber('CONSUMER_MAX_RETRY_MS', 5000, { min: 0 }),
     multiplier: 2,

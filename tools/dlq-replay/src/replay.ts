@@ -26,6 +26,7 @@ export function matchesFilter(record: DlqRecord, filter: ReplayFilter): boolean 
 export function toReplayMessage(
   record: DlqRecord,
   source: { topic: string; partition: number; offset: string },
+  replayedBy?: string,
 ): Message {
   const { key, headers, value, valueEncoding } = record.original;
   const previousReplays = Number(headers[Headers.ReplayCount] ?? 0);
@@ -36,6 +37,7 @@ export function toReplayMessage(
       ...headers,
       [Headers.ReplayedFrom]: `${source.topic}/${source.partition}@${source.offset}`,
       [Headers.ReplayCount]: String(previousReplays + 1),
+      ...(replayedBy && { [Headers.ReplayedBy]: replayedBy }),
     },
   };
 }

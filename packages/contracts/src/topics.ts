@@ -60,4 +60,6 @@ export const Headers = {
   /** Set by tools/dlq-replay on replayed messages. */
   ReplayedFrom: 'replayed-from',
   ReplayCount: 'replay-count',
+  /** OAuth client that replayed the message (identity only, never a token). */
+  ReplayedBy: 'replayed-by',
 } as const;

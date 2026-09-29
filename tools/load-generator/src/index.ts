@@ -9,7 +9,8 @@
  */
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
-import { Topics } from '@orderflow/contracts';
+import { ClientCredentialsTokenProvider, authConfigFromEnv } from '@orderflow/auth';
+import { CUSTOMER_TIERS, Topics, countrySchema, type CustomerTier } from '@orderflow/contracts';
 import {
   createEventProducer,
   createKafka,
@@ -17,7 +18,7 @@ import {
   ensureTopics,
 } from '@orderflow/kafka-utils';
 import { poisonMessages } from './poison.js';
-import { SCENARIOS, randomOrder, type Scenario } from './scenarios.js';
+import { SCENARIOS, randomOrder, type OrderOverrides, type Scenario } from './scenarios.js';
 import { summarize, type SettledOrder } from './stats.js';
 
 const USAGE = `Usage: npm run load -- [options]
@@ -25,12 +26,17 @@ const USAGE = `Usage: npm run load -- [options]
   -n, --count <n>        number of orders to create (default 20)
   -r, --rate <n>         orders per second (default 5)
   -s, --scenario <name>  ${SCENARIOS.join(' | ')} (default happy)
+      --tier <tier>      force the customer tier: ${CUSTOMER_TIERS.join(' | ')} (default random)
+      --country <cc>     force the country, e.g. DE (default random)
   -w, --wait             wait for orders to settle and print a summary
       --timeout <sec>    max seconds to wait with --wait (default 60)
       --duplicate        re-publish every orders.created event (duplicate delivery demo)
       --poison <n>       publish <n> malformed messages straight to Kafka and exit
       --url <url>        order-service base URL (default http://localhost:3000)
-  -h, --help`;
+  -h, --help
+
+Authenticates with OAuth2 client credentials (Keycloak client "load-generator",
+override with LOADGEN_CLIENT_ID / LOADGEN_CLIENT_SECRET / AUTH_TOKEN_URL).`;
 
 // Keep CLI output focused on results; set LOG_LEVEL=info to see Kafka client logs.
 process.env.LOG_LEVEL ??= 'warn';
@@ -40,6 +46,8 @@ const { values } = parseArgs({
     count: { type: 'string', short: 'n', default: '20' },
     rate: { type: 'string', short: 'r', default: '5' },
     scenario: { type: 'string', short: 's', default: 'happy' },
+    tier: { type: 'string' },
+    country: { type: 'string' },
     wait: { type: 'boolean', short: 'w', default: false },
     timeout: { type: 'string', default: '60' },
     duplicate: { type: 'boolean', default: false },
@@ -74,10 +82,19 @@ interface CreatedOrder extends SettledOrder {
   id: string;
 }
 
+const tokens = new ClientCredentialsTokenProvider({
+  tokenUrl: authConfigFromEnv().tokenUrl,
+  clientId: process.env.LOADGEN_CLIENT_ID ?? 'load-generator',
+  // Demo secret from infra/keycloak/realm-export.json - not a real credential.
+  clientSecret: process.env.LOADGEN_CLIENT_SECRET ?? 'load-generator-demo-secret',
+});
+
 async function http<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { authorization: `Bearer ${await tokens.getToken()}` };
+  if (body !== undefined) headers['content-type'] = 'application/json';
   const res = await fetch(url, {
     method,
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${method} ${url} -> ${res.status} ${await res.text()}`);
@@ -90,6 +107,7 @@ async function createOrders(opts: {
   rate: number;
   scenario: Scenario;
   duplicate: boolean;
+  overrides: OrderOverrides;
 }): Promise<CreatedOrder[]> {
   const intervalMs = 1000 / opts.rate;
   const started = Date.now();
@@ -103,7 +121,7 @@ async function createOrders(opts: {
           const order = await http<CreatedOrder>(
             'POST',
             `${opts.url}/orders`,
-            randomOrder(opts.scenario),
+            randomOrder(opts.scenario, Math.random, opts.overrides),
           );
           if (opts.duplicate) {
             await http('POST', `${opts.url}/orders/${order.id}/republish`);
@@ -178,6 +196,12 @@ async function main() {
   if (!SCENARIOS.includes(scenario))
     throw new Error(`--scenario must be one of ${SCENARIOS.join(', ')}`);
 
+  const tier = values.tier as CustomerTier | undefined;
+  if (tier !== undefined && !CUSTOMER_TIERS.includes(tier)) {
+    throw new Error(`--tier must be one of ${CUSTOMER_TIERS.join(', ')}`);
+  }
+  const country = values.country === undefined ? undefined : countrySchema.parse(values.country);
+
   const url = values.url.replace(/\/$/, '');
   const orders = await createOrders({
     url,
@@ -185,6 +209,7 @@ async function main() {
     rate: positiveInt('rate', values.rate),
     scenario,
     duplicate: values.duplicate,
+    overrides: { customerTier: tier, country },
   });
   if (values.wait && orders.length > 0) {
     await waitForSettled(url, orders, positiveInt('timeout', values.timeout));

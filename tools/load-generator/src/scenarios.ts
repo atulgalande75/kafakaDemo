@@ -1,5 +1,9 @@
+import type { CustomerTier } from '@orderflow/contracts';
+
 export interface OrderRequest {
   customerId: string;
+  customerTier: CustomerTier;
+  country: string;
   items: Array<{ sku: string; quantity: number; unitPrice: number }>;
 }
 
@@ -21,23 +25,44 @@ const IN_STOCK_CHEAP: Sku[] = ['SKU-KEYBOARD', 'SKU-MOUSE', 'SKU-MONITOR', 'SKU-
 
 const line = (sku: Sku, quantity: number) => ({ sku, quantity, unitPrice: CATALOG[sku] });
 
+export interface OrderOverrides {
+  customerTier?: CustomerTier;
+  country?: string;
+}
+
+const COUNTRIES = ['US', 'US', 'US', 'DE', 'GB', 'FR', 'IN', 'BR'];
+
 /**
- * Builds a random order for a scenario:
+ * Builds a random order for a scenario (random tier and country unless overridden):
  *  - happy: cheap, in-stock items (only PAYMENT_DECLINE_RATE causes cancellations)
  *  - mixed: ~15% out of stock (SKU-GPU), ~15% over the card limit (2x SKU-LAPTOP)
  */
-export function randomOrder(scenario: Scenario, random: () => number = Math.random): OrderRequest {
+export function randomOrder(
+  scenario: Scenario,
+  random: () => number = Math.random,
+  overrides: OrderOverrides = {},
+): OrderRequest {
   const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)]!;
-  const customerId = `customer-${1 + Math.floor(random() * 50)}`;
+  const tierRoll = random();
+  const customer = {
+    customerId: `customer-${1 + Math.floor(random() * 50)}`,
+    customerTier:
+      overrides.customerTier ??
+      (tierRoll < 0.7 ? 'standard' : tierRoll < 0.9 ? 'gold' : 'platinum'),
+    country: overrides.country ?? pick(COUNTRIES),
+  } satisfies Omit<OrderRequest, 'items'>;
 
   if (scenario === 'mixed') {
     const roll = random();
-    if (roll < 0.15) return { customerId, items: [line('SKU-GPU', 1), line('SKU-MOUSE', 1)] };
-    if (roll < 0.3) return { customerId, items: [line('SKU-LAPTOP', 2)] };
+    if (roll < 0.15) return { ...customer, items: [line('SKU-GPU', 1), line('SKU-MOUSE', 1)] };
+    if (roll < 0.3) return { ...customer, items: [line('SKU-LAPTOP', 2)] };
   }
 
   const count = 1 + Math.floor(random() * 3);
   const skus = new Set<Sku>();
   while (skus.size < count) skus.add(pick(IN_STOCK_CHEAP));
-  return { customerId, items: [...skus].map((sku) => line(sku, 1 + Math.floor(random() * 3))) };
+  return {
+    ...customer,
+    items: [...skus].map((sku) => line(sku, 1 + Math.floor(random() * 3))),
+  };
 }
