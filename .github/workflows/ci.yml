@@ -61,24 +61,43 @@ jobs:
       # Keycloak issues the OAuth2 tokens the load generator and dlq-replay use.
       # No secrets needed: the demo realm (infra/keycloak) ships its own demo credentials,
       # and without LD_SDK_KEY every service uses the local feature-flag provider.
-      - name: Start Kafka and Keycloak
-        run: docker compose up -d --wait kafka keycloak
+      - name: Start Kafka, Keycloak and Postgres
+        run: docker compose up -d --wait kafka keycloak postgres
 
       - name: Start services
         run: |
           mkdir -p logs
-          for s in order payment inventory notification; do
+          for s in order payment inventory notification gateway; do
             nohup npm start -w @orderflow/$s-service > logs/$s.log 2>&1 &
           done
           timeout 60 bash -c 'until curl -sf localhost:3000/health; do sleep 1; done'
+          timeout 60 bash -c 'until curl -sf localhost:3001/health; do sleep 1; done'
+          timeout 60 bash -c 'until curl -sf localhost:3002/health; do sleep 1; done'
 
       - name: API rejects unauthenticated requests
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/orders)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3000/orders/some-id)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3001/inventory)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3002/stream)" = 401
 
       - name: Orders flow through the pipeline
         run: npm run load -- --count 30 --rate 15 --scenario mixed --wait --timeout 60
+
+      - name: Gateway streams live events
+        run: |
+          TOKEN=$(curl -s -d grant_type=password -d client_id=orderflow-cli -d username=alice -d password=alice \
+            localhost:8081/realms/orderflow/protocol/openid-connect/token | node -pe 'JSON.parse(require("fs").readFileSync(0)).access_token')
+          # Open the stream, place an order while it is open, and expect the snapshot, stock and order events.
+          (timeout 12 curl -sN localhost:3002/stream -H "authorization: Bearer $TOKEN" > stream.txt || true) &
+          sleep 3
+          curl -sf -X POST localhost:3000/orders -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            -d '{"customerId":"alice","items":[{"sku":"SKU-MOUSE","quantity":1,"unitPrice":25}]}'
+          wait
+          grep -q '^event: snapshot' stream.txt
+          grep -q '^event: flags' stream.txt
+          grep -q '^event: stock' stream.txt
+          grep -q 'order.created' stream.txt
 
       - name: Duplicates are skipped
         run: |

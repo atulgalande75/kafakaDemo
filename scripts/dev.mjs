@@ -2,6 +2,7 @@
 //
 //   npm run dev                          # all services
 //   npm run dev -- --only payment        # just payment-service
+//   npm run dev -- --skip web            # backend only (no Vite dev server)
 //   npm run dev -- --skip payment        # everything except payment-service
 //
 // A ./.env file (see .env.example) is loaded if present and inherited by all services.
@@ -11,11 +12,14 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+// Backend services run as `services/<name>-service` under tsx; `web` is the Vite dev server.
 const SERVICES = [
   { name: 'order', color: 36 },
   { name: 'payment', color: 35 },
   { name: 'inventory', color: 33 },
   { name: 'notification', color: 32 },
+  { name: 'gateway', color: 34 },
+  { name: 'web', color: 94, dir: 'apps/web' },
 ];
 
 const { values } = parseArgs({
@@ -49,6 +53,7 @@ if (existsSync(envFile)) {
 }
 
 const tsx = fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url));
+const vite = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
 const width = Math.max(...selected.map((s) => s.name.length));
 const useColor = process.env.NO_COLOR === undefined;
 const children = new Set();
@@ -58,11 +63,16 @@ for (const service of selected) {
   const prefix = useColor ? `\x1b[${service.color}m${label}\x1b[0m ` : `${label} `;
   // Spawned directly (no npm/sh layers) so a single Ctrl+C reaches every process once
   // and each service can disconnect its consumer cleanly before exiting.
+  const isWeb = service.name === 'web';
   const child = spawn(
     process.execPath,
-    [tsx, 'watch', '--clear-screen=false', '--conditions=@orderflow/source', 'src/index.ts'],
+    isWeb
+      ? [vite]
+      : [tsx, 'watch', '--clear-screen=false', '--conditions=@orderflow/source', 'src/index.ts'],
     {
-      cwd: fileURLToPath(new URL(`../services/${service.name}-service`, import.meta.url)),
+      cwd: fileURLToPath(
+        new URL(`../${service.dir ?? `services/${service.name}-service`}`, import.meta.url),
+      ),
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

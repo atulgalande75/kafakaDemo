@@ -2,6 +2,7 @@
 #   Kafka    -> localhost:9092 (single-node KRaft: broker + controller, no ZooKeeper)
 #   Kafka UI -> http://localhost:8080
 #   Keycloak -> http://localhost:8081 (realm "orderflow", admin console: admin / admin)
+#   Postgres -> localhost:5432 (inventory-service state; user/password/db: orderflow)
 #
 # Topics are created by the services on startup (see packages/contracts/src/topics.ts),
 # so auto-topic-creation is disabled to keep the topic layout explicit.
@@ -42,6 +43,23 @@ services:
       timeout: 10s
       retries: 20
       start_period: 10s
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    container_name: orderflow-postgres
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    environment:
+      POSTGRES_USER: orderflow
+      POSTGRES_PASSWORD: orderflow
+      POSTGRES_DB: orderflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U orderflow -d orderflow']
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   kafka-ui:
     image: ${KAFKA_UI_IMAGE:-ghcr.io/kafbat/kafka-ui:v1.4.2}
@@ -86,3 +104,4 @@ services:
 
 volumes:
   kafka-data:
+  postgres-data:

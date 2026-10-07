@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../packages/auth"
+    },
+    {
+      "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../packages/kafka-utils"
+    },
+    {
+      "path": "../../packages/feature-flags"
+    },
+    {
+      "path": "../../packages/stream-types"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "71a5a3a3-906f-4247-9ac4-17e1ee00392b",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/atulga/Kaluza-JTR/kafakaDemo/.archify/architecture-orderflow-20261007-130000/candidate.json",
+  "output": "/home/atulga/Kaluza-JTR/kafakaDemo/.archify/architecture-orderflow-20261007-130000/orderflow-architecture.html",
+  "specification": {
+    "sha256": "78c8b1e5dca3aa5724f036e6f42fdf30efdcf83ab368a2d39d6fe4b55a26dfb3",
+    "bytes": 5655
+  },
+  "artifact": {
+    "sha256": "f168c46a58ed378bb948263a78cb3e89904c173fd9cbd9efb98d711a578f9c6d",
+    "bytes": 775383
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "OrderFlow: Kafka Event-Driven Architecture",
+    "output": "orderflow-architecture.html",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "v-signin", "label": "1 Sign in", "focus": ["browser", "keycloak", "gateway"], "note": "Code flow + PKCE; services verify the JWT locally via JWKS." },
+      { "id": "v-order", "label": "2 Place order", "focus": ["browser", "proxy", "order", "kafka"], "note": "POST /orders returns 202; orders.created is published to Kafka." },
+      { "id": "v-parallel", "label": "3 Parallel consumers", "focus": ["kafka", "payment", "inventory", "pg"], "note": "Payment and inventory read orders.created in separate groups." },
+      { "id": "v-outcome", "label": "4 Outcome", "focus": ["kafka", "order", "notification"], "note": "Order becomes CONFIRMED or CANCELLED; notification logs it." },
+      { "id": "v-live", "label": "5 Live to browser", "focus": ["kafka", "gateway", "proxy", "browser"], "note": "Gateway turns every event into SSE frames for that user." }
+    ]
+  },
+  "components": [
+    { "id": "keycloak", "type": "security", "label": "Keycloak", "sublabel": "OIDC :8081", "pos": [40, 40], "size": [130, 60] },
+    { "id": "browser", "type": "frontend", "label": "React App", "sublabel": "browser :5173", "pos": [40, 200], "size": [130, 60] },
+    { "id": "proxy", "type": "cloud", "label": "Vite Proxy", "sublabel": "/api/* no CORS", "pos": [250, 200], "size": [140, 60] },
+    { "id": "gateway", "type": "backend", "label": "gateway-service", "sublabel": "SSE + flags :3002", "pos": [450, 40], "size": [150, 60] },
+    { "id": "order", "type": "backend", "label": "order-service", "sublabel": "REST + saga :3000", "pos": [450, 200], "size": [150, 60] },
+    { "id": "inventory", "type": "backend", "label": "inventory-service", "sublabel": "stock + relay :3001", "pos": [450, 360], "size": [150, 60] },
+    { "id": "pg", "type": "database", "label": "Postgres", "sublabel": "stock, outbox :5432", "pos": [450, 500], "size": [150, 60] },
+    { "id": "kafka", "type": "messagebus", "label": "Kafka", "sublabel": "event backbone :9092", "pos": [750, 40], "size": [150, 400] },
+    { "id": "payment", "type": "backend", "label": "payment-service", "sublabel": "worker, no HTTP", "pos": [1040, 160], "size": [150, 60] },
+    { "id": "notification", "type": "backend", "label": "notification-service", "sublabel": "worker, no HTTP", "pos": [1040, 320], "size": [150, 60] },
+    { "id": "dlq", "type": "messagebus", "label": "topic.dlq", "sublabel": "dead letters", "pos": [775, 500], "size": [100, 60] },
+    { "id": "replay", "type": "external", "label": "dlq-replay", "sublabel": "CLI tool", "pos": [1040, 500], "size": [150, 60] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "HTTP services verify JWT", "wraps": ["gateway", "order", "inventory"] }
+  ],
+  "connections": [
+    { "id": "sign-in", "from": "browser", "to": "keycloak", "label": "sign in", "variant": "security", "fromSide": "top", "toSide": "bottom" },
+    { "id": "jwks", "from": "keycloak", "to": "gateway", "label": "JWKS keys", "variant": "security", "fromSide": "right", "toSide": "left" },
+    { "id": "browser-proxy", "from": "browser", "to": "proxy", "label": "HTTP+SSE", "variant": "emphasis" },
+    { "id": "proxy-gateway", "from": "proxy", "to": "gateway", "variant": "dashed", "fromSide": "top", "toSide": "left" },
+    { "id": "proxy-order", "from": "proxy", "to": "order", "variant": "emphasis" },
+    { "id": "proxy-inventory", "from": "proxy", "to": "inventory", "variant": "dashed", "fromSide": "bottom", "toSide": "left" },
+    { "id": "order-publish", "from": "order", "to": "kafka", "label": "orders.created", "variant": "emphasis" },
+    { "id": "kafka-order", "from": "kafka", "to": "order", "label": "outcomes", "variant": "default" },
+    { "id": "kafka-payment", "from": "kafka", "to": "payment", "label": "orders.created", "variant": "emphasis" },
+    { "id": "payment-publish", "from": "payment", "to": "kafka", "label": "payments.*", "variant": "default" },
+    { "id": "kafka-inventory", "from": "kafka", "to": "inventory", "label": "orders.created", "variant": "emphasis" },
+    { "id": "inventory-publish", "from": "inventory", "to": "kafka", "label": "inventory.*", "variant": "default" },
+    { "id": "inventory-sql", "from": "inventory", "to": "pg", "label": "SQL tx", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "kafka-notification", "from": "kafka", "to": "notification", "label": "events", "variant": "default" },
+    { "id": "kafka-gateway", "from": "kafka", "to": "gateway", "label": "every event", "variant": "dashed" },
+    { "id": "kafka-dlq", "from": "kafka", "to": "dlq", "label": "poison", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "id": "dlq-replay", "from": "dlq", "to": "replay", "label": "replay", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Order lifecycle", "items": ["PENDING on POST /orders, then 202", "CONFIRMED only if payment completed and stock reserved", "CANCELLED as soon as either fails; stock is released"] },
+    { "dot": "cyan", "title": "Event rules", "items": ["Key = orderId, so one order stays ordered", "Services never call each other, only Kafka", "Outbox in Postgres: stock change and events commit together"] },
+    { "dot": "rose", "title": "Security + resilience", "items": ["JWT checked locally on every request", "Consumers dedupe by eventId, retry with backoff, then DLQ", "Feature flags (LaunchDarkly or file) tune all services"] }
+  ]
+}

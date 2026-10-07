@@ -5,6 +5,7 @@
 //   npm run flag -- payment-failure-rate 1
 //   npm run flag -- payment-consumer-enabled false
 //   npm run flag -- notification-channel sms
+//   npm run flag -- new-inventory-dashboard true   # web app: cards instead of a table
 //   npm run flag -- --reset                        # back to the safe defaults
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -14,6 +15,10 @@ const DEFAULTS = {
   'fraud-check-enabled': false,
   'notification-channel': 'email',
   'max-retry-attempts': 3,
+  'live-updates-enabled': true,
+  'new-inventory-dashboard': false,
+  'bulk-adjust-enabled': false,
+  'activity-feed-size': 50,
 };
 
 const file = process.env.FEATURE_FLAGS_FILE ?? new URL('../feature-flags.json', import.meta.url);

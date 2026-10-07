@@ -8,6 +8,10 @@ export interface FlagValues {
   'fraud-check-enabled': boolean;
   'notification-channel': NotificationChannel;
   'max-retry-attempts': number;
+  'live-updates-enabled': boolean;
+  'new-inventory-dashboard': boolean;
+  'bulk-adjust-enabled': boolean;
+  'activity-feed-size': number;
 }
 
 export type FlagKey = keyof FlagValues;
@@ -62,7 +66,44 @@ export const FLAGS: { [K in FlagKey]: Definition<FlagValues[K]> } = {
     description:
       'Retries (after the first attempt) before the consumer wrapper dead-letters a message',
   },
+  'live-updates-enabled': {
+    type: 'boolean',
+    defaultValue: true,
+    description:
+      'Web app: true streams updates over SSE, false falls back to polling every few seconds',
+  },
+  'new-inventory-dashboard': {
+    type: 'boolean',
+    defaultValue: false,
+    description: 'Web app: show stock as a grid of cards instead of a table',
+  },
+  'bulk-adjust-enabled': {
+    type: 'boolean',
+    defaultValue: false,
+    description: 'Web app: adds a one-click "restock all low items" action to the stock panel',
+  },
+  'activity-feed-size': {
+    type: 'number',
+    min: 5,
+    max: 200,
+    integer: true,
+    defaultValue: 50,
+    description: 'Web app: how many entries the live activity feed shows',
+  },
 };
+
+/** Flags the web app consumes. The gateway evaluates these per user and sends them to the browser. */
+export const UI_FLAG_KEYS = [
+  'live-updates-enabled',
+  'new-inventory-dashboard',
+  'bulk-adjust-enabled',
+  'activity-feed-size',
+] as const satisfies readonly FlagKey[];
+
+export type UiFlagKey = (typeof UI_FLAG_KEYS)[number];
+
+export const isUiFlagKey = (key: string): key is UiFlagKey =>
+  (UI_FLAG_KEYS as readonly string[]).includes(key);
 
 export const FLAG_KEYS = Object.keys(FLAGS) as FlagKey[];
 
