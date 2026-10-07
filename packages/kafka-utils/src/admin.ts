@@ -21,7 +21,13 @@ export async function ensureTopics(
     try {
       await admin.createTopics({
         waitForLeaders: true,
-        topics: missing.map(({ topic, numPartitions }) => ({ topic, numPartitions })),
+        topics: missing.map(({ topic, numPartitions, config }) => ({
+          topic,
+          numPartitions,
+          ...(config && {
+            configEntries: Object.entries(config).map(([name, value]) => ({ name, value })),
+          }),
+        })),
       });
       logger.info({ topics: missing.map((s) => s.topic) }, 'created topics');
     } catch (err) {

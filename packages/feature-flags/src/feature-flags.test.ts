@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { TestData } from '@launchdarkly/node-server-sdk/integrations';
 import { pino } from 'pino';
 import { afterEach, describe, expect, it } from 'vitest';
-import { orderContext, serviceContext, toLdContext } from './context.js';
+import { orderContext, serviceContext, toLdContext, userContext } from './context.js';
 import { defaultValues, sanitize } from './definitions.js';
 import { watchFlag, type FeatureFlags } from './feature-flags.js';
 import { LaunchDarklyFeatureFlags } from './launchdarkly.js';
@@ -52,7 +52,19 @@ describe('sanitize', () => {
       'fraud-check-enabled': false,
       'notification-channel': 'email',
       'max-retry-attempts': 3,
+      'live-updates-enabled': true,
+      'new-inventory-dashboard': false,
+      'bulk-adjust-enabled': false,
+      'activity-feed-size': 50,
     });
+  });
+
+  it('validates the web app flags', () => {
+    expect(sanitize('live-updates-enabled', 'false').value).toBe(false);
+    expect(sanitize('activity-feed-size', 120).value).toBe(120);
+    expect(sanitize('activity-feed-size', 1)).toMatchObject({ value: 50 }); // below the minimum
+    expect(sanitize('activity-feed-size', 500)).toMatchObject({ value: 50 }); // above the maximum
+    expect(sanitize('new-inventory-dashboard', 'maybe')).toMatchObject({ value: false });
   });
 });
 
@@ -69,6 +81,15 @@ describe('toLdContext', () => {
       kind: 'service',
       key: 'payment-service',
     });
+  });
+
+  it('builds a user context from the token subject', () => {
+    expect(toLdContext(userContext('sub-1', 'alice'))).toEqual({
+      kind: 'user',
+      key: 'sub-1',
+      name: 'alice',
+    });
+    expect(toLdContext(userContext('sub-2'))).toEqual({ kind: 'user', key: 'sub-2' });
   });
 });
 
@@ -209,6 +230,21 @@ describe('LaunchDarklyFeatureFlags', () => {
       ),
     ).toBe(true);
     expect(await flags.get('fraud-check-enabled', order)).toBe(false);
+  });
+
+  it('targets web app flags at individual users', async () => {
+    const { flags } = await withTestData((td) =>
+      td.update(
+        td
+          .flag('new-inventory-dashboard')
+          .booleanFlag()
+          .fallthroughVariation(false)
+          .ifMatch('user', 'name', 'alice')
+          .thenReturn(true),
+      ),
+    );
+    expect(await flags.get('new-inventory-dashboard', userContext('s-1', 'alice'))).toBe(true);
+    expect(await flags.get('new-inventory-dashboard', userContext('s-2', 'bob'))).toBe(false);
   });
 
   it('serves safe defaults for flags LaunchDarkly does not know', async () => {

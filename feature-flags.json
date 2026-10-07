@@ -3,5 +3,9 @@
   "payment-consumer-enabled": true,
   "fraud-check-enabled": false,
   "notification-channel": "email",
-  "max-retry-attempts": 3
+  "max-retry-attempts": 3,
+  "live-updates-enabled": true,
+  "new-inventory-dashboard": false,
+  "bulk-adjust-enabled": false,
+  "activity-feed-size": 50
 }

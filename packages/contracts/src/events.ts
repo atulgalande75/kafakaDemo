@@ -8,6 +8,9 @@ export const EventTypes = {
   PaymentFailed: 'payment.failed',
   InventoryReserved: 'inventory.reserved',
   InventoryRejected: 'inventory.rejected',
+  InventoryReleased: 'inventory.released',
+  StockLevelChanged: 'stock.level.changed',
+  StockLow: 'stock.low',
 } as const;
 
 export type EventType = (typeof EventTypes)[keyof typeof EventTypes];
@@ -72,6 +75,53 @@ export const inventoryRejectedDataSchema = z.object({
   ),
 });
 
+/** A reservation was given back to stock (e.g. the order's payment failed). */
+export const inventoryReleasedDataSchema = z.object({
+  orderId: z.uuid(),
+  reservationId: z.uuid(),
+  items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().positive() })),
+  reason: z.string().min(1),
+});
+
+/** Why a SKU's stock level changed. `snapshot` is a resync of the current level, not a change. */
+export const STOCK_CHANGE_REASONS = [
+  'snapshot',
+  'reserved',
+  'released',
+  'restock',
+  'shrinkage',
+  'correction',
+] as const;
+export const stockChangeReasonSchema = z.enum(STOCK_CHANGE_REASONS);
+export type StockChangeReason = z.infer<typeof stockChangeReasonSchema>;
+
+/**
+ * The state-carrying changelog event for one SKU (topic `inventory.stock-levels`,
+ * key = sku, log-compacted): the latest event per SKU *is* the current stock level.
+ * `version` increases by one with every change to the SKU, so a consumer can ignore
+ * an event older than what it already has.
+ */
+export const stockLevelChangedDataSchema = z.object({
+  sku: z.string().min(1),
+  name: z.string().min(1),
+  available: z.number().int().nonnegative(),
+  previousAvailable: z.number().int().nonnegative(),
+  delta: z.number().int(),
+  reason: stockChangeReasonSchema,
+  version: z.number().int().nonnegative(),
+  lowStockThreshold: z.number().int().nonnegative(),
+  orderId: z.uuid().optional(),
+  note: z.string().max(500).optional(),
+});
+
+/** Stock dropped to or below the SKU's low-stock threshold (emitted when crossing it). */
+export const stockLowDataSchema = z.object({
+  sku: z.string().min(1),
+  name: z.string().min(1),
+  available: z.number().int().nonnegative(),
+  threshold: z.number().int().nonnegative(),
+});
+
 /** Current (latest) schema for each event type. */
 export const eventSchemas = {
   [EventTypes.OrderCreated]: defineEnvelope(EventTypes.OrderCreated, 1, orderCreatedDataSchema),
@@ -91,6 +141,17 @@ export const eventSchemas = {
     1,
     inventoryRejectedDataSchema,
   ),
+  [EventTypes.InventoryReleased]: defineEnvelope(
+    EventTypes.InventoryReleased,
+    1,
+    inventoryReleasedDataSchema,
+  ),
+  [EventTypes.StockLevelChanged]: defineEnvelope(
+    EventTypes.StockLevelChanged,
+    1,
+    stockLevelChangedDataSchema,
+  ),
+  [EventTypes.StockLow]: defineEnvelope(EventTypes.StockLow, 1, stockLowDataSchema),
 } as const;
 
 export type EventOf<T extends EventType> = z.infer<(typeof eventSchemas)[T]>;
@@ -103,6 +164,9 @@ export type PaymentCompletedEvent = EventOf<'payment.completed'>;
 export type PaymentFailedEvent = EventOf<'payment.failed'>;
 export type InventoryReservedEvent = EventOf<'inventory.reserved'>;
 export type InventoryRejectedEvent = EventOf<'inventory.rejected'>;
+export type InventoryReleasedEvent = EventOf<'inventory.released'>;
+export type StockLevelChangedEvent = EventOf<'stock.level.changed'>;
+export type StockLowEvent = EventOf<'stock.low'>;
 export type OrderItem = z.infer<typeof orderItemSchema>;
 
 export type AnyEvent = { [T in EventType]: EventOf<T> }[EventType];
@@ -114,6 +178,9 @@ export const topicEventType = {
   [Topics.PaymentsFailed]: EventTypes.PaymentFailed,
   [Topics.InventoryReserved]: EventTypes.InventoryReserved,
   [Topics.InventoryRejected]: EventTypes.InventoryRejected,
+  [Topics.InventoryReleased]: EventTypes.InventoryReleased,
+  [Topics.StockLevels]: EventTypes.StockLevelChanged,
+  [Topics.StockLow]: EventTypes.StockLow,
 } as const satisfies Record<Topic, EventType>;
 
 export type EventForTopic<T extends Topic> = EventOf<(typeof topicEventType)[T]>;

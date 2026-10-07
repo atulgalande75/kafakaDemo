@@ -12,5 +12,7 @@ export default defineConfig({
   test: {
     include: ['{packages,services,tools}/*/src/**/*.test.ts'],
     environment: 'node',
+    // Starting the in-process Postgres (PGlite) can take a while when many workers boot at once.
+    hookTimeout: 60_000,
   },
 });

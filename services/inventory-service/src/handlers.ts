@@ -1,59 +1,62 @@
-import {
-  EventTypes,
-  Topics,
-  createEvent,
-  deriveEventId,
-  type OrderCreatedEvent,
-} from '@orderflow/contracts';
-import type { EventHandlers, EventProducer, HandlerContext } from '@orderflow/kafka-utils';
-import type { Inventory } from './inventory.js';
+import { Topics, type PaymentFailedEvent, type OrderCreatedEvent } from '@orderflow/contracts';
+import type { EventHandlers, HandlerContext } from '@orderflow/kafka-utils';
+import type { Cause, InventoryStore } from './inventory.js';
 
+const causeOf = (event: {
+  eventId: string;
+  correlationId: string;
+  actor?: Cause['actor'];
+}): Cause => ({
+  eventId: event.eventId,
+  correlationId: event.correlationId,
+  actor: event.actor,
+});
+
+/**
+ * Reacts to orders and payment failures. The resulting events go to the outbox in the same
+ * transaction as the stock change; `relay.poke()` just makes the relay send them right away.
+ */
 export function createInventoryHandlers(
-  producer: Pick<EventProducer, 'publish'>,
-  inventory: Inventory,
+  inventory: InventoryStore,
+  relay: { poke(): void },
 ): EventHandlers {
   return {
     [Topics.OrdersCreated]: async (event: OrderCreatedEvent, { log }: HandlerContext) => {
       const { orderId, items } = event.data;
-      const result = inventory.reserve(orderId, items);
-      const options = {
-        correlationId: event.correlationId,
-        actor: event.actor,
-        eventId: deriveEventId(event.eventId, 'inventory'),
-      };
+      const result = await inventory.reserve(orderId, items, causeOf(event));
+      relay.poke();
 
-      if (result.ok) {
-        await producer.publish(
-          Topics.InventoryReserved,
-          createEvent(
-            EventTypes.InventoryReserved,
-            { orderId, reservationId: result.reservationId, items: result.items },
-            options,
-          ),
-          { key: orderId },
-        );
-        log.info(
-          {
-            orderId,
-            items: result.items,
-            alreadyReserved: result.alreadyReserved,
-            remaining: Object.fromEntries(
-              result.items.map((i) => [i.sku, inventory.available(i.sku)]),
-            ),
-          },
-          'inventory reserved',
-        );
+      switch (result.outcome) {
+        case 'reserved':
+          log.info(
+            { orderId, items: result.items, alreadyReserved: result.duplicate },
+            'inventory reserved',
+          );
+          break;
+        case 'rejected':
+          log.info(
+            { orderId, reason: result.reason, alreadyRejected: result.duplicate },
+            'inventory rejected',
+          );
+          break;
+        case 'skipped':
+          log.info(
+            { orderId, status: result.status },
+            'order already cancelled - nothing reserved',
+          );
+          break;
+      }
+    },
+
+    [Topics.PaymentsFailed]: async (event: PaymentFailedEvent, { log }: HandlerContext) => {
+      const { orderId, reason } = event.data;
+      const result = await inventory.release(orderId, `payment failed: ${reason}`, causeOf(event));
+      relay.poke();
+
+      if (result.outcome === 'released') {
+        log.info({ orderId, items: result.items }, 'payment failed -> reservation released');
       } else {
-        await producer.publish(
-          Topics.InventoryRejected,
-          createEvent(
-            EventTypes.InventoryRejected,
-            { orderId, reason: result.reason, unavailable: result.unavailable },
-            options,
-          ),
-          { key: orderId },
-        );
-        log.info({ orderId, reason: result.reason }, 'inventory rejected');
+        log.debug({ orderId, result }, 'payment failed -> no stock to release');
       }
     },
   };

@@ -5,6 +5,9 @@
       "path": "packages/contracts"
     },
     {
+      "path": "packages/stream-types"
+    },
+    {
       "path": "packages/kafka-utils"
     },
     {
@@ -24,6 +27,9 @@
     },
     {
       "path": "services/notification-service"
+    },
+    {
+      "path": "services/gateway-service"
     },
     {
       "path": "tools/load-generator"

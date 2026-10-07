@@ -1,26 +1,31 @@
 # Demo script
 
-A 30–40 minute walkthrough of the order pipeline. Each scenario lists what to run,
-what to watch, and the point it makes. The scenarios build on each other, but you
-can run any of them on its own after [Setup](#0-setup).
+A 45–60 minute walkthrough of the order pipeline and the real-time React dashboard
+on top of it. Each scenario lists what to run, what to watch, and the point it makes.
+The scenarios build on each other, but you can run any of them on its own after
+[Setup](#0-setup). Scenarios 1 to 7 are about Kafka itself, 8 to 10 about getting it
+to a browser.
 
-| #   | Scenario                                                                | Shows                                                |
-| --- | ----------------------------------------------------------------------- | ---------------------------------------------------- |
-| 1   | [Happy path](#1-happy-path)                                             | Keys, partitions, correlation, the order saga        |
-| 2   | [Authentication and authorization](#2-authentication-and-authorization) | JWTs, scopes, ownership, 401 vs 403, actor in events |
-| 3   | [Outage and lag catch-up](#3-outage-and-lag-catch-up)                   | Kill-switch flag, lag, catch-up, scaling out         |
-| 4   | [Poison message → DLQ](#4-poison-message--dlq)                          | Validation, DLQ records, the operator tool           |
-| 5   | [Chaos → retries → DLQ → replay](#5-chaos--retries--dlq--replay)        | Chaos flag, backoff, retry-count flag, replay        |
-| 6   | [Duplicate delivery](#6-duplicate-delivery)                             | Idempotent consumers                                 |
-| 7   | [Feature flags and LaunchDarkly](#7-feature-flags-and-launchdarkly)     | Fraud check, channels, targeting, LD outage          |
+| #   | Scenario                                                                | Shows                                                 |
+| --- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| 1   | [Happy path](#1-happy-path)                                             | Keys, partitions, correlation, the order saga         |
+| 2   | [Authentication and authorization](#2-authentication-and-authorization) | JWTs, scopes, ownership, 401 vs 403, actor in events  |
+| 3   | [Outage and lag catch-up](#3-outage-and-lag-catch-up)                   | Kill-switch flag, lag, catch-up, scaling out          |
+| 4   | [Poison message → DLQ](#4-poison-message--dlq)                          | Validation, DLQ records, the operator tool            |
+| 5   | [Chaos → retries → DLQ → replay](#5-chaos--retries--dlq--replay)        | Chaos flag, backoff, retry-count flag, replay         |
+| 6   | [Duplicate delivery](#6-duplicate-delivery)                             | Idempotent consumers                                  |
+| 7   | [Feature flags and LaunchDarkly](#7-feature-flags-and-launchdarkly)     | Fraud check, channels, targeting, LD outage           |
+| 8   | [Live dashboard](#8-live-dashboard)                                     | SSE, per-user visibility, resume, reconnect           |
+| 9   | [Inventory is real state](#9-inventory-is-real-state)                   | Postgres, outbox, compacted topic, compensation       |
+| 10  | [Feature flags in the web app](#10-feature-flags-in-the-web-app)        | Per-user UI flags, live switch from stream to polling |
 
 **Windows used below**
 
-| Window  | Runs                                                                                 |
-| ------- | ------------------------------------------------------------------------------------ |
-| **T1**  | `npm run dev`: all four services                                                     |
-| **T2**  | Commands (`curl`, `npm run load`, `npm run flag`, `npm run dlq:replay`)              |
-| Browser | Kafka UI <http://localhost:8080>, Keycloak <http://localhost:8081> (`admin`/`admin`) |
+| Window  | Runs                                                                                                                                    |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **T1**  | `npm run dev`: the four services, the gateway and the web app                                                                           |
+| **T2**  | Commands (`curl`, `npm run load`, `npm run flag`, `npm run dlq:replay`, `psql`)                                                         |
+| Browser | Web app <http://localhost:5173> (`alice`/`alice`), Kafka UI <http://localhost:8080>, Keycloak <http://localhost:8081> (`admin`/`admin`) |
 
 The flags in this script are changed with `npm run flag -- <key> <value>`, which
 edits `feature-flags.json`. Every service logs `feature flag changed` within about a
@@ -32,10 +37,10 @@ instead (see [section 7](#7-feature-flags-and-launchdarkly)).
 ## 0. Setup
 
 ```bash
-# T2 – Kafka (KRaft, no ZooKeeper), Kafka UI and Keycloak; waits until all are healthy
+# T2 – Kafka (KRaft, no ZooKeeper), Kafka UI, Keycloak and Postgres; waits until all are healthy
 docker compose up -d --wait
 
-# T1 – all four services (the first run also runs `npm install`)
+# T1 – the four services, the gateway and the web app (the first run also runs `npm install`)
 npm run dev
 ```
 
@@ -57,12 +62,15 @@ BOB=$(user_token bob)
 ADMIN=$(curl -s -d grant_type=client_credentials -d client_id=dlq-replay -d client_secret=dlq-replay-demo-secret $KC | jsonfield access_token)
 ```
 
-**Kafka UI → Topics.** Point out the five business topics (3 partitions each) and
+**Kafka UI → Topics.** Point out the eight business topics (3 partitions each) and
 one `.dlq` topic per business topic. The services created them at startup from
-the definitions in `packages/contracts/src/topics.ts`.
+the definitions in `packages/contracts/src/topics.ts`. `inventory.stock-levels` is
+special: it is _log-compacted_ (see [scenario 9](#9-inventory-is-real-state)).
 
-To start over at any point: stop the services, run `npm run infra:down`,
-`docker compose up -d --wait` and `npm run flag -- --reset`.
+To start over at any point: stop the services, run `npm run infra:down` (this also wipes
+Postgres, so stock goes back to its seed values), `docker compose up -d --wait` and
+`npm run flag -- --reset`. Scenarios 8 and 9 assume that fresh state
+(`SKU-WEBCAM` has 10 in stock, `SKU-GPU` has 0).
 
 ---
 
@@ -96,7 +104,7 @@ parallel, in separate consumer groups) → `order CONFIRMED` → two notificatio
 
 **Kafka UI → Topics → `orders.created` → Messages:**
 
-- The **key** is the orderId. Every event for this order (on all five topics) has
+- The **key** is the orderId. Every event for this order (on every order topic) has
   the same key, so it lands on the same partition number and stays in order.
 - The **headers** include `event-id`, `event-type` and `correlation-id`.
 - The **value** is the envelope: `eventId, type, version, occurredAt, correlationId, actor, data`.
@@ -456,7 +464,7 @@ npm run load -- -n 2 --wait
 notification-service switches from `[email] Payment received …` to `[sms] …` on the
 next message.
 
-**With LaunchDarkly (optional).** Create the five flags as described in
+**With LaunchDarkly (optional).** Create the five backend flags as described in
 [ld-flags.md](ld-flags.md#setting-up-launchdarkly), put your server-side SDK key in
 `.env` (`LD_SDK_KEY=sdk-…`), and restart T1. Each service logs
 `connected to LaunchDarkly`. Then:
@@ -479,10 +487,243 @@ Clean up with `npm run flag -- --reset`.
 
 ---
 
+## 8. Live dashboard
+
+**Goal:** show Kafka events reaching a browser the moment they happen, safely: each user
+sees only their own orders, and a dropped connection heals itself.
+
+**Sign in.** Open <http://localhost:5173> and click _Sign in_. The browser is sent to
+Keycloak (authorization code flow with PKCE; there is no client secret in the page), you log
+in as `alice` / `alice`, and you land on the dashboard with a green **Live** badge. The
+stock table is already full: the gateway rebuilt it from Kafka.
+
+**A normal order.** In _Place an order_, pick a product and click _Place order_. Watch,
+all without refreshing:
+
+- the **Live activity** feed fills from the bottom of the saga up: `order.created`,
+  `payment.completed`, `inventory.reserved`;
+- the product's **stock row flashes** and shows `−1 reserved`;
+- **My orders** shows the order `PENDING`, then `CONFIRMED` a moment later.
+
+**A declined order.** Pick _Laptop 14"_ with quantity 2. The form warns that the total is
+over the card limit. Place it and watch the stock drop by 2 (`−2 reserved`), the feed show
+`payment.failed`, and then the stock **go back up** (`+2 released`) with an
+`inventory.released` entry. The order ends `CANCELLED`. That is the compensation:
+inventory-service reacts to `payments.failed` and gives the reservation back.
+
+**Two users.** Open a private window, sign in as `bob` / `bob`, and place an order in each
+window. Each user's feed and orders table show only their own orders, but the stock table
+moves in both windows for everyone's orders: stock is shared, orders are private. (The
+gateway filters by the event's `actor`, the token's `sub`; an admin token would see all.)
+
+**On the wire.** In T2, watch the same stream the page uses:
+
+```bash
+curl -sN localhost:3002/stream -H "authorization: Bearer $ALICE"
+```
+
+The first frame is `event: snapshot` (the whole stock table plus recent feed), then
+`event: flags`, then a `stock` or `feed` frame for everything that happens. Place an order
+in the browser to see them arrive, and note the `id:` on each feed frame. Stop the
+curl, and reconnect from an id you saw (use the whole value, which looks like `k3f9x:12`):
+
+```bash
+curl -sN localhost:3002/stream -H "authorization: Bearer $ALICE" -H "last-event-id: <id>" | head -5
+```
+
+The snapshot now says `"resumed":true` and carries only the feed entries you missed.
+That is what the browser does after a network blip.
+
+**Gateway restart.** Restart just the gateway (the dev runner restarts a service whenever
+its source changes):
+
+```bash
+touch services/gateway-service/src/index.ts
+```
+
+The header changes to **Reconnecting…** at once (the gateway ends its streams on
+shutdown), and a few seconds later back to **Live**. The stock table is complete again
+because it is rebuilt from the compacted topic; the activity feed starts empty because it
+only lives in the gateway's memory.
+
+**Talking points:**
+
+- **State vs events.** Stock is state: the latest level per SKU is all that matters, so it
+  comes from a compacted topic and a full table is sent on every connect, so a client can
+  never miss a change. The feed is events: a bounded buffer and `Last-Event-ID` give a
+  reconnecting client exactly what it missed.
+- **Every gateway instance needs every event**, so each uses its own consumer groups
+  (`gateway-service-<id>-state` / `-feed`) instead of sharing one. Compare with the other
+  services, where a shared group _spreads_ the work.
+- **Why SSE, not WebSockets:** the data only flows one way. Commands stay ordinary REST calls
+  to order-service and inventory-service.
+- **Dead connections.** The gateway sends a `ping` every 15 s; if the page hears nothing for
+  45 s it reconnects by itself, even when a proxy left the broken connection open.
+
+---
+
+## 9. Inventory is real state
+
+**Goal:** show that stock is durable and consistent: Postgres, a transactional outbox, a
+compacted changelog topic and compensation.
+
+**Postgres holds the truth.**
+
+```bash
+docker exec orderflow-postgres psql -U orderflow -c "select sku, available, version from stock order by sku"
+```
+
+Compare with the dashboard: same numbers. `version` goes up by one on every change to that SKU;
+it travels in every stock event, so a consumer can ignore an update older than what it has.
+
+**Low-stock alert.** `SKU-WEBCAM` starts with 10 and a low-stock threshold of 5. In the
+dashboard order 6 webcams: the row shows `Low`, and an `inventory.stock-low` alert appears in
+the feed (try the _Alerts_ tab). It fires once, when the level _crosses_ the threshold, not on
+every change below it. Now restock:
+
+```bash
+curl -s -X POST localhost:3001/inventory/SKU-WEBCAM/adjust -H "authorization: Bearer $ALICE" \
+  -H 'content-type: application/json' -d '{"delta":6,"reason":"restock","note":"supplier delivery"}'
+```
+
+The row goes back to `In stock` in the browser. Stock can't go negative; this is refused:
+
+```bash
+curl -s -X POST localhost:3001/inventory/SKU-GPU/adjust -H "authorization: Bearer $ALICE" \
+  -H 'content-type: application/json' -d '{"delta":-1,"reason":"shrinkage"}'
+```
+
+`409 insufficient_stock`. (The API needs the `inventory:write` scope. A token without it gets `403`, and a token issued only for another service, such as the load generator's, is rejected with `401` because its audience is wrong.)
+
+**The outbox.** Every stock change and the events it produces are written in **one database
+transaction**; a relay then publishes them to Kafka and marks them sent:
+
+```bash
+docker exec orderflow-postgres psql -U orderflow -c "select topic, count(*) as total, count(published_at) as published from outbox group by 1 order by 1"
+```
+
+`total` equals `published` once the relay has caught up. A crash between "stock changed" and
+"event published" can't lose or invent an event, which a plain `save(); publish()` can.
+
+**The compacted topic.** In Kafka UI open **Topics → `inventory.stock-levels`**. Messages are
+keyed by SKU; the **Settings** tab shows `cleanup.policy = compact`. Or from the command
+line:
+
+```bash
+docker exec orderflow-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic inventory.stock-levels --from-beginning --timeout-ms 4000 --property print.key=true | tail -5
+```
+
+Compaction keeps the newest record per key, so the topic stays about the size of the
+catalogue however many changes happen (after a few minutes only a handful of records per
+SKU remain, versus every row that went through the outbox). That is why a new consumer
+can rebuild the whole stock table by reading it from the beginning.
+
+**Restart without losing anything.**
+
+```bash
+touch services/inventory-service/src/index.ts
+```
+
+The inventory log shows `inventory database ready … "seeded":0` (nothing was re-seeded; the
+stock is whatever Postgres holds) and `published stock snapshot`. Refresh the `psql` query:
+unchanged. Before this change inventory was in memory and a restart reset it.
+
+**Idempotency and the race.** One `reservations` row per order records the outcome, so a
+redelivered `orders.created` never reserves twice, and a rejection stays a rejection even if
+stock arrives later. And because payment and inventory process `orders.created` in
+parallel, `payments.failed` can arrive _first_:
+
+```bash
+docker exec orderflow-postgres psql -U orderflow -c "select status, count(*) from reservations group by 1 order by 1"
+```
+
+`released` are reservations given back after a failed payment; `cancelled` are orders whose
+payment failure arrived before inventory had reserved anything (the late reservation is
+skipped); `rejected` are out-of-stock orders.
+
+**Talking points:** the outbox turns "dual write" into one transaction; idempotency lives in
+the data, not in memory; compaction makes a topic behave like a table; compensation is just
+another consumer of `payments.failed`.
+
+---
+
+## 10. Feature flags in the web app
+
+**Goal:** change what the UI shows, and how it gets its data, at runtime, per user, with
+no deploy. The browser never talks to LaunchDarkly: the gateway evaluates the flags for the
+signed-in user and sends them down the stream.
+
+Keep the dashboard open next to T2. The line at the bottom of the page shows the active
+flags. See them as the API serves them:
+
+```bash
+curl -s localhost:3002/flags -H "authorization: Bearer $ALICE"
+```
+
+Now flip flags and watch the page, without a reload. Each change shows up within about a
+second:
+
+```bash
+npm run flag -- new-inventory-dashboard true   # the stock table becomes a grid of cards
+npm run flag -- bulk-adjust-enabled true       # a "Restock low items" form appears
+npm run flag -- activity-feed-size 5           # the feed is trimmed to 5 entries
+```
+
+**Bulk restock.** With the flag on, make a SKU low (order 6 webcams, as in scenario 9), and
+the form's button reads `Restock 1 low item`. Click it: the stock updates through the
+stream like any other change, and the button now says `Nothing is low`. Turn the flag off
+and the form disappears.
+
+**Switching the transport.** This one flag changes how the page gets its data:
+
+```bash
+npm run flag -- live-updates-enabled false
+```
+
+The badge changes from **Live** to **Polling**, and, with only this one window open, the gateway's open connections drop to
+zero:
+
+```bash
+curl -s localhost:3002/health      # "clients": 0
+```
+
+Place an order in the page: the stock and orders still update, but up to 5 seconds later,
+because the page now asks for a snapshot every 5 s. Turn it back on:
+
+```bash
+npm run flag -- live-updates-enabled true
+```
+
+and the page is **Live** again (`"clients": 1`). This is a real operational lever: if the
+gateway is struggling, polling is much cheaper than holding thousands of connections, and
+you can switch every browser over without a deploy.
+
+Reset everything with `npm run flag -- --reset`.
+
+**How it works.** The gateway evaluates four flags with a `user` context (key = the token's
+`sub`, name = the username), so a flag service can target individual people. The browser
+gets the values three ways: `GET /flags` when it starts, a `flags` frame on the stream
+right after the snapshot (and again on every change), and a `flags` field on `/snapshot`
+for clients that are polling. If the gateway can't be asked, the page uses safe defaults
+(stream, table, no bulk action, 50 entries).
+
+**With LaunchDarkly (optional).** Create the four web app flags
+([ld-flags.md](ld-flags.md#setting-up-launchdarkly)) and set `LD_SDK_KEY`. Then:
+
+- **One person first:** serve `new-inventory-dashboard = true` to the `user` context named
+  `alice`. Alice's open page turns into cards within a second; Bob's window, signed in at the
+  same time, stays a table.
+- **Operators only:** serve `bulk-adjust-enabled = true` to the people who manage stock.
+  (The API still enforces `inventory:write`; the flag only decides who sees the button.)
+- **Incident lever:** serve `live-updates-enabled = false` to everyone.
+
+---
+
 ## Cleanup
 
 ```bash
 # Ctrl+C in T1
 npm run flag -- --reset
-npm run infra:down     # stops Kafka, Kafka UI and Keycloak and deletes the Kafka volume
+npm run infra:down     # stops Kafka, Kafka UI, Keycloak and Postgres and deletes their volumes
 ```

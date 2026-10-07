@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "5839fca4-1af7-45bb-a8c5-c37aa598e826",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/home/atulga/Kaluza-JTR/kafakaDemo/.archify/sequence-order-request-20261007-120000/candidate.json",
+  "output": "/home/atulga/Kaluza-JTR/kafakaDemo/.archify/sequence-order-request-20261007-120000/order-request.html",
+  "specification": {
+    "sha256": "50b2c030a5b49d4c4e30cf3593098841f2ef1f140ec003f821b5257ac5e58f8c",
+    "bytes": 5166
+  },
+  "artifact": {
+    "sha256": "3700fe52581031b3b4a05c03098356d1e1dc89a760789110d3a3221596dced9b",
+    "bytes": 763739
+  }
+}

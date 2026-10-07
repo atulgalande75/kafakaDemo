@@ -1,0 +1,17 @@
+{
+  "name": "@orderflow/stream-types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types of the gateway's real-time stream, shared by gateway-service and the web app (types only, no runtime code)",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@orderflow/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}

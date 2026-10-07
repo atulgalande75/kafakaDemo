@@ -9,6 +9,7 @@ import {
   decodeEvent,
   deriveEventId,
   dlqTopic,
+  keyKindOf,
   serializeEvent,
   sourceTopicOf,
 } from './index.js';
@@ -33,7 +34,15 @@ describe('topics', () => {
   it('declares every business topic with 3 partitions plus a DLQ', () => {
     expect(TOPIC_SPECS.find((t) => t.topic === 'orders.created')?.numPartitions).toBe(3);
     expect(TOPIC_SPECS.map((t) => t.topic)).toContain('payments.failed.dlq');
-    expect(TOPIC_SPECS).toHaveLength(10);
+    expect(TOPIC_SPECS).toHaveLength(16);
+  });
+
+  it('compacts the stock changelog and keys stock topics by SKU', () => {
+    const levels = TOPIC_SPECS.find((t) => t.topic === Topics.StockLevels);
+    expect(levels?.config?.['cleanup.policy']).toBe('compact');
+    expect(TOPIC_SPECS.find((t) => t.topic === Topics.OrdersCreated)?.config).toBeUndefined();
+    expect(keyKindOf(Topics.StockLevels)).toBe('sku');
+    expect(keyKindOf(Topics.OrdersCreated)).toBe('orderId');
   });
 });
 
@@ -135,5 +144,41 @@ describe('actor', () => {
     );
     expect(decoded.actor).toBeUndefined();
     expect(decoded.data).toMatchObject({ customerTier: 'standard', country: 'US' });
+  });
+});
+
+describe('stock events', () => {
+  const level = {
+    sku: 'SKU-MOUSE',
+    name: 'Mouse',
+    available: 9,
+    previousAvailable: 10,
+    delta: -1,
+    reason: 'reserved' as const,
+    version: 4,
+    lowStockThreshold: 5,
+    orderId: randomUUID(),
+  };
+
+  it('round-trips stock.level.changed on the compacted topic', () => {
+    const event = createEvent(EventTypes.StockLevelChanged, level, { correlationId: 'c' });
+    expect(decodeEvent(Topics.StockLevels, Buffer.from(serializeEvent(event)))).toEqual(event);
+  });
+
+  it('rejects a negative stock level', () => {
+    expect(() =>
+      createEvent(
+        EventTypes.StockLevelChanged,
+        { ...level, available: -1 },
+        { correlationId: 'c' },
+      ),
+    ).toThrow();
+  });
+
+  it('rejects an event of the wrong type for the topic', () => {
+    const event = createEvent(EventTypes.StockLevelChanged, level, { correlationId: 'c' });
+    expect(() => decodeEvent(Topics.StockLow, Buffer.from(serializeEvent(event)))).toThrow(
+      InvalidEventError,
+    );
   });
 });

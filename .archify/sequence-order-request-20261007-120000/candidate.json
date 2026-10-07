@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Order Request Through Kafka",
+    "output": "order-request.html",
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "Browser",
+      "sublabel": "React app :5173"
+    },
+    {
+      "id": "kc",
+      "type": "security",
+      "label": "Keycloak",
+      "sublabel": "OIDC :8081"
+    },
+    {
+      "id": "order",
+      "type": "backend",
+      "label": "Order svc",
+      "sublabel": "REST :3000"
+    },
+    {
+      "id": "kafka",
+      "type": "messagebus",
+      "label": "Kafka",
+      "sublabel": "event backbone :9092"
+    },
+    {
+      "id": "pay",
+      "type": "backend",
+      "label": "Payment svc",
+      "sublabel": "worker"
+    },
+    {
+      "id": "inv",
+      "type": "backend",
+      "label": "Inventory svc",
+      "sublabel": "stock + Postgres"
+    },
+    {
+      "id": "gw",
+      "type": "backend",
+      "label": "Gateway svc",
+      "sublabel": "SSE :3002"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 250,
+      "label": "Sign in"
+    },
+    {
+      "from": 260,
+      "to": 340,
+      "label": "Accept order"
+    },
+    {
+      "from": 350,
+      "to": 520,
+      "label": "Parallel consumers"
+    },
+    {
+      "from": 530,
+      "to": 650,
+      "label": "Outcome + live view"
+    },
+    {
+      "from": 660,
+      "to": 720,
+      "label": "Compensation"
+    }
+  ],
+  "messages": [
+    {
+      "id": "login",
+      "from": "user",
+      "to": "kc",
+      "y": 175,
+      "label": "login (code + PKCE)",
+      "variant": "security"
+    },
+    {
+      "id": "token",
+      "from": "kc",
+      "to": "user",
+      "y": 203,
+      "label": "JWT access token",
+      "variant": "return"
+    },
+    {
+      "id": "post-order",
+      "from": "user",
+      "to": "order",
+      "y": 280,
+      "label": "POST /orders + Bearer",
+      "variant": "emphasis",
+      "note": "verifies JWT locally via JWKS"
+    },
+    {
+      "id": "emit-created",
+      "from": "order",
+      "to": "kafka",
+      "y": 308,
+      "label": "orders.created (key=orderId)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "accepted",
+      "from": "order",
+      "to": "user",
+      "y": 330,
+      "label": "202 Accepted (PENDING)",
+      "variant": "return"
+    },
+    {
+      "id": "to-pay",
+      "from": "kafka",
+      "to": "pay",
+      "y": 380,
+      "label": "orders.created",
+      "variant": "default"
+    },
+    {
+      "id": "pay-out",
+      "from": "pay",
+      "to": "kafka",
+      "y": 408,
+      "label": "payments.completed / failed",
+      "variant": "default"
+    },
+    {
+      "id": "to-inv",
+      "from": "kafka",
+      "to": "inv",
+      "y": 445,
+      "label": "orders.created",
+      "variant": "default",
+      "note": "one DB tx: reserve stock + write outbox"
+    },
+    {
+      "id": "relay",
+      "from": "inv",
+      "to": "kafka",
+      "y": 501,
+      "label": "relay: inventory.* events",
+      "variant": "dashed"
+    },
+    {
+      "id": "to-order",
+      "from": "kafka",
+      "to": "order",
+      "y": 560,
+      "label": "payment + stock outcomes",
+      "variant": "default",
+      "note": "PENDING becomes CONFIRMED or CANCELLED"
+    },
+    {
+      "id": "to-gw",
+      "from": "kafka",
+      "to": "gw",
+      "y": 600,
+      "label": "every event",
+      "variant": "dashed"
+    },
+    {
+      "id": "sse",
+      "from": "gw",
+      "to": "user",
+      "y": 628,
+      "label": "SSE: stock + feed frames",
+      "variant": "return"
+    },
+    {
+      "id": "release",
+      "from": "kafka",
+      "to": "inv",
+      "y": 680,
+      "label": "payments.failed: release stock",
+      "variant": "dashed"
+    },
+    {
+      "id": "released",
+      "from": "inv",
+      "to": "kafka",
+      "y": 708,
+      "label": "inventory.released",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "order",
+      "from": 275,
+      "to": 335,
+      "type": "backend"
+    },
+    {
+      "participant": "pay",
+      "from": 375,
+      "to": 413,
+      "type": "backend"
+    },
+    {
+      "participant": "inv",
+      "from": 440,
+      "to": 506,
+      "type": "backend"
+    },
+    {
+      "participant": "order",
+      "from": 555,
+      "to": 565,
+      "type": "backend"
+    },
+    {
+      "participant": "gw",
+      "from": 595,
+      "to": 633,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Services never call each other",
+      "items": [
+        "order, payment, inventory and gateway only exchange events through Kafka",
+        "Browser talks to HTTP services via the Vite proxy"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Reliable events",
+      "items": [
+        "Stock change and events commit in one DB transaction (outbox)",
+        "Consumers dedupe by eventId; bad messages go to <topic>.dlq"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Failure path",
+      "items": [
+        "payments.failed releases reserved stock",
+        "Order becomes CANCELLED as soon as either step fails"
+      ]
+    }
+  ]
+}
